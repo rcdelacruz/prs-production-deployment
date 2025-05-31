@@ -1,0 +1,270 @@
+groups:
+  - name: prs-application
+    rules:
+      # High error rate
+      - alert: HighErrorRate
+        expr: prs:error_rate_5m > 0.1
+        for: 5m
+        labels:
+          severity: critical
+          service: prs-backend
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is {{ $value | humanize }} requests/second for {{ $labels.instance }}"
+          runbook_url: "https://wiki.company.com/runbooks/high-error-rate"
+
+      # High response time
+      - alert: HighResponseTime
+        expr: prs:response_time_95th > 2
+        for: 5m
+        labels:
+          severity: warning
+          service: prs-backend
+        annotations:
+          summary: "High response time detected"
+          description: "95th percentile response time is {{ $value }}s for {{ $labels.instance }}"
+          runbook_url: "https://wiki.company.com/runbooks/high-response-time"
+
+      # Service down
+      - alert: ServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "Service {{ $labels.job }} on {{ $labels.instance }} has been down for more than 1 minute"
+          runbook_url: "https://wiki.company.com/runbooks/service-down"
+
+      # Low request rate (possible issue)
+      - alert: LowRequestRate
+        expr: prs:request_rate_5m < 0.1
+        for: 10m
+        labels:
+          severity: warning
+          service: prs-backend
+        annotations:
+          summary: "Unusually low request rate"
+          description: "Request rate is {{ $value | humanize }} requests/second, which may indicate an issue"
+
+  - name: prs-infrastructure
+    rules:
+      # High CPU usage
+      - alert: HighCPUUsage
+        expr: prs:cpu_usage > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+          runbook_url: "https://wiki.company.com/runbooks/high-cpu"
+
+      # Critical CPU usage
+      - alert: CriticalCPUUsage
+        expr: prs:cpu_usage > 95
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+
+      # High memory usage
+      - alert: HighMemoryUsage
+        expr: prs:memory_usage > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+
+      # Critical memory usage
+      - alert: CriticalMemoryUsage
+        expr: prs:memory_usage > 95
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical memory usage on {{ $labels.instance }}"
+          description: "Memory usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+
+      # Disk space low
+      - alert: DiskSpaceLow
+        expr: prs:disk_usage > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low disk space on {{ $labels.instance }}"
+          description: "Disk usage is {{ $value | humanizePercentage }} on {{ $labels.instance }} for mount {{ $labels.mountpoint }}"
+
+      # Critical disk space
+      - alert: CriticalDiskSpace
+        expr: prs:disk_usage > 95
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical disk space on {{ $labels.instance }}"
+          description: "Disk usage is {{ $value | humanizePercentage }} on {{ $labels.instance }} for mount {{ $labels.mountpoint }}"
+
+      # Load average high
+      - alert: HighLoadAverage
+        expr: node_load5 / count(count(node_cpu_seconds_total) by (cpu)) by (instance) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High load average on {{ $labels.instance }}"
+          description: "Load average is {{ $value }} on {{ $labels.instance }}"
+
+  - name: prs-database
+    rules:
+      # Database connections high
+      - alert: DatabaseConnectionsHigh
+        expr: prs:database_connections_used > 80
+        for: 5m
+        labels:
+          severity: warning
+          service: postgres
+        annotations:
+          summary: "High database connections"
+          description: "Database connections at {{ $value | humanizePercentage }} of maximum on {{ $labels.instance }}"
+
+      # Critical database connections
+      - alert: CriticalDatabaseConnections
+        expr: prs:database_connections_used > 95
+        for: 2m
+        labels:
+          severity: critical
+          service: postgres
+        annotations:
+          summary: "Critical database connections"
+          description: "Database connections at {{ $value | humanizePercentage }} of maximum on {{ $labels.instance }}"
+
+      # Database replication lag
+      - alert: DatabaseReplicationLag
+        expr: pg_replication_lag_seconds > 60
+        for: 5m
+        labels:
+          severity: critical
+          service: postgres
+        annotations:
+          summary: "High database replication lag"
+          description: "Replication lag is {{ $value }}s on {{ $labels.instance }}"
+
+      # Database down
+      - alert: DatabaseDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: postgres
+        annotations:
+          summary: "PostgreSQL database is down"
+          description: "PostgreSQL database on {{ $labels.instance }} is down"
+
+      # Slow queries
+      - alert: SlowQueries
+        expr: rate(pg_stat_activity_max_tx_duration[5m]) > 30
+        for: 5m
+        labels:
+          severity: warning
+          service: postgres
+        annotations:
+          summary: "Slow database queries detected"
+          description: "Long running queries detected on {{ $labels.instance }}"
+
+  - name: prs-redis
+    rules:
+      # Redis memory usage high
+      - alert: RedisMemoryHigh
+        expr: prs:redis_memory_used > 85
+        for: 5m
+        labels:
+          severity: warning
+          service: redis
+        annotations:
+          summary: "High Redis memory usage"
+          description: "Redis memory usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+
+      # Redis down
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: redis
+        annotations:
+          summary: "Redis is down"
+          description: "Redis on {{ $labels.instance }} is down"
+
+      # Redis high connections
+      - alert: RedisHighConnections
+        expr: redis_connected_clients / redis_config_maxclients * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          service: redis
+        annotations:
+          summary: "High Redis connections"
+          description: "Redis connections at {{ $value | humanizePercentage }} of maximum on {{ $labels.instance }}"
+
+  - name: prs-ssl-certificates
+    rules:
+      # SSL certificate expiring soon
+      - alert: SSLCertificateExpiringSoon
+        expr: probe_ssl_earliest_cert_expiry - time() < 86400 * 30
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "SSL certificate expires soon"
+          description: "SSL certificate for {{ $labels.instance }} expires in {{ $value | humanizeDuration }}"
+
+      # SSL certificate expires very soon
+      - alert: SSLCertificateExpiresVerySoon
+        expr: probe_ssl_earliest_cert_expiry - time() < 86400 * 7
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "SSL certificate expires very soon"
+          description: "SSL certificate for {{ $labels.instance }} expires in {{ $value | humanizeDuration }}"
+
+  - name: prs-business-metrics
+    rules:
+      # No user activity (business critical)
+      - alert: NoUserActivity
+        expr: absent(increase(prs_user_logins_total[1h])) or increase(prs_user_logins_total[1h]) == 0
+        for: 30m
+        labels:
+          severity: critical
+          team: business
+        annotations:
+          summary: "No user activity detected"
+          description: "No user logins detected in the last hour, which may indicate a critical issue"
+
+      # High requisition processing time
+      - alert: HighRequisitionProcessingTime
+        expr: histogram_quantile(0.95, rate(prs_requisition_processing_duration_seconds_bucket[5m])) > 300
+        for: 10m
+        labels:
+          severity: warning
+          team: business
+        annotations:
+          summary: "High requisition processing time"
+          description: "95th percentile requisition processing time is {{ $value }}s"
+
+      # Failed payment processing
+      - alert: FailedPaymentProcessing
+        expr: rate(prs_payment_failures_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+          team: business
+        annotations:
+          summary: "High payment failure rate"
+          description: "Payment failure rate is {{ $value | humanize }} failures/second"
