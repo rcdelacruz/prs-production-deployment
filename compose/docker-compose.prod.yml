@@ -1,0 +1,356 @@
+version: '3.8'
+
+services:
+  # Nginx Load Balancer with SSL
+  nginx:
+    image: nginx:1.24-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ../nginx/prod/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../nginx/prod/conf.d:/etc/nginx/conf.d:ro
+      - ../nginx/prod/ssl:/etc/nginx/ssl:ro
+      - nginx_cache:/var/cache/nginx
+      - static_files:/usr/share/nginx/html/static:ro
+    secrets:
+      - ssl_certificate
+      - ssl_private_key
+    networks:
+      - frontend_network
+      - backend_network
+    deploy:
+      replicas: 2
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Backend API Cluster
+  backend:
+    image: prs-backend:${VERSION:-latest}
+    build:
+      context: ../../prs-backend
+      dockerfile: Dockerfile.prod
+      target: production
+    env_file:
+      - ../backend.prod.env
+    environment:
+      - NODE_ENV=production
+      - CLUSTER_WORKERS=0
+    volumes:
+      - backend_logs:/usr/app/logs
+      - upload_files:/usr/app/upload
+    secrets:
+      - postgres_password
+      - redis_password
+      - jwt_secret
+      - encryption_key
+      - minio_access_key
+      - minio_secret_key
+    networks:
+      - backend_network
+      - database_network
+      - monitoring_network
+    deploy:
+      replicas: 3
+      placement:
+        constraints:
+          - node.labels.tier == backend
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        order: start-first
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      - postgres-primary
+      - redis-cluster
+
+  # Frontend Application
+  frontend:
+    image: prs-frontend:${VERSION:-latest}
+    build:
+      context: ../../prs-frontend
+      dockerfile: Dockerfile.prod
+      target: production
+    env_file:
+      - ../frontend.prod.env
+    volumes:
+      - static_files:/usr/share/nginx/html
+    networks:
+      - frontend_network
+    deploy:
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.tier == frontend
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+
+  # PostgreSQL Primary Database
+  postgres-primary:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_INITDB_ARGS: "--auth-local=scram-sha-256"
+    command: >
+      postgres
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c work_mem=4MB
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c ssl=on
+      -c ssl_cert_file=/etc/ssl/certs/server.crt
+      -c ssl_key_file=/etc/ssl/private/server.key
+      -c ssl_ca_file=/etc/ssl/certs/ca.crt
+      -c log_statement=mod
+      -c log_min_duration_statement=1000
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - postgres_backups:/backups
+      - ../postgres/prod/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ../postgres/prod/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+    secrets:
+      - postgres_password
+      - postgres_replica_password
+      - postgres_ssl_cert
+      - postgres_ssl_key
+      - postgres_ca_cert
+    networks:
+      - database_network
+      - backup_network
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.tier == database
+          - node.labels.postgres == primary
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
+      restart_policy:
+        condition: any
+        delay: 10s
+        max_attempts: 3
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Redis Cluster
+  redis-cluster:
+    image: redis:7-alpine
+    command: >
+      redis-server
+      --requirepass $(cat /run/secrets/redis_password)
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 1gb
+      --maxmemory-policy allkeys-lru
+      --tcp-keepalive 60
+      --timeout 0
+      --tcp-backlog 511
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+    volumes:
+      - redis_data:/data
+    secrets:
+      - redis_password
+    networks:
+      - database_network
+      - monitoring_network
+    deploy:
+      replicas: 3
+      placement:
+        constraints:
+          - node.labels.tier == cache
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "$(cat /run/secrets/redis_password)", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # MinIO Object Storage Cluster
+  minio-cluster:
+    image: minio/minio:latest
+    command: server /data{1...4} --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER_FILE: /run/secrets/minio_access_key
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_secret_key
+      MINIO_PROMETHEUS_AUTH_TYPE: public
+    volumes:
+      - minio_data:/data
+      - minio_certs:/root/.minio/certs
+    secrets:
+      - minio_access_key
+      - minio_secret_key
+    networks:
+      - backend_network
+      - monitoring_network
+    deploy:
+      replicas: 4
+      placement:
+        constraints:
+          - node.labels.tier == storage
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  frontend_network:
+    driver: overlay
+    attachable: true
+  backend_network:
+    driver: overlay
+    attachable: true
+  database_network:
+    driver: overlay
+    internal: true
+  monitoring_network:
+    driver: overlay
+    attachable: true
+  backup_network:
+    driver: overlay
+    internal: true
+
+volumes:
+  postgres_data:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=${NFS_SERVER},rw,noatime,rsize=8192,wsize=8192,tcp,timeo=14
+      device: ":${NFS_PATH}/postgres_data"
+  postgres_backups:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=${BACKUP_NFS_SERVER},rw,noatime
+      device: ":${BACKUP_NFS_PATH}/postgres_backups"
+  redis_data:
+    driver: local
+  minio_data:
+    driver: local
+  minio_certs:
+    driver: local
+  nginx_cache:
+    driver: local
+  static_files:
+    driver: local
+  backend_logs:
+    driver: local
+  upload_files:
+    driver: local
+
+secrets:
+  postgres_password:
+    external: true
+  postgres_replica_password:
+    external: true
+  postgres_ssl_cert:
+    external: true
+  postgres_ssl_key:
+    external: true
+  postgres_ca_cert:
+    external: true
+  redis_password:
+    external: true
+  minio_access_key:
+    external: true
+  minio_secret_key:
+    external: true
+  jwt_secret:
+    external: true
+  encryption_key:
+    external: true
+  ssl_certificate:
+    external: true
+  ssl_private_key:
+    external: true
+  grafana_password:
+    external: true
+  backup_encryption_key:
+    external: true
