@@ -1,0 +1,282 @@
+version: '3.8'
+
+services:
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:1.24-alpine
+    container_name: prs-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/sites-enabled:/etc/nginx/sites-enabled:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - /mnt/nas/uploads:/var/www/uploads:ro
+      - nginx_cache:/var/cache/nginx
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - prs_network
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Backend API
+  backend:
+    image: prs-backend:${VERSION:-latest}
+    container_name: prs-backend
+    restart: unless-stopped
+    build:
+      context: ../../prs-backend
+      dockerfile: Dockerfile
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - HOST=0.0.0.0
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      
+      # Database configuration
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_PORT=5432
+      - DISABLE_SSL=false
+      
+      # Application secrets
+      - JWT_SECRET=${JWT_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - OTP_KEY=${OTP_KEY}
+      - PASS_SECRET=${PASS_SECRET}
+      - BYPASS_OTP=${BYPASS_OTP:-false}
+      
+      # CORS and API settings
+      - CORS_ORIGIN=${CORS_ORIGIN}
+      - CITYLAND_API_URL=${CITYLAND_API_URL}
+      - CITYLAND_ACCOUNTING_URL=${CITYLAND_ACCOUNTING_URL}
+      
+      # File upload settings (no MinIO)
+      - UPLOAD_DRIVER=local
+      - UPLOAD_PATH=/app/uploads
+      
+      # Monitoring
+      - PROMETHEUS_ENABLED=true
+      - LOKI_ENABLED=false
+      
+      # Root user
+      - ROOT_USER_NAME=${ROOT_USER_NAME}
+      - ROOT_USER_EMAIL=${ROOT_USER_EMAIL}
+      - ROOT_USER_PASSWORD=${ROOT_USER_PASSWORD}
+    volumes:
+      - /mnt/nas/uploads:/app/uploads
+      - /mnt/nas/logs/backend:/app/logs
+    depends_on:
+      - postgres
+    networks:
+      - prs_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Frontend Application
+  frontend:
+    image: prs-frontend:${VERSION:-latest}
+    container_name: prs-frontend
+    restart: unless-stopped
+    build:
+      context: ../../prs-frontend
+      dockerfile: Dockerfile
+    environment:
+      - NODE_ENV=production
+      - VITE_APP_API_URL=https://${DOMAIN}/api
+      - VITE_APP_UPLOAD_URL=https://${DOMAIN}/api/upload
+      - VITE_APP_ENVIRONMENT=production
+      - VITE_APP_ENABLE_DEVTOOLS=false
+    networks:
+      - prs_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: prs-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_INITDB_ARGS=--auth-local=scram-sha-256
+    command: >
+      postgres
+      -c max_connections=100
+      -c shared_buffers=128MB
+      -c effective_cache_size=512MB
+      -c work_mem=4MB
+      -c maintenance_work_mem=32MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=8MB
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c ssl=on
+      -c ssl_cert_file=/var/lib/postgresql/server.crt
+      -c ssl_key_file=/var/lib/postgresql/server.key
+      -c log_statement=mod
+      -c log_min_duration_statement=1000
+    volumes:
+      - /mnt/nas/database:/var/lib/postgresql/data
+      - /mnt/nas/backups:/backups
+      - ./config/postgres/server.crt:/var/lib/postgresql/server.crt:ro
+      - ./config/postgres/server.key:/var/lib/postgresql/server.key:ro
+    networks:
+      - prs_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Portainer - Container Management
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: prs-portainer
+    restart: unless-stopped
+    command: -H unix:///var/run/docker.sock --base-url /portainer
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+    networks:
+      - prs_network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9000/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Adminer - Database Management
+  adminer:
+    image: adminer:latest
+    container_name: prs-adminer
+    restart: unless-stopped
+    environment:
+      - ADMINER_DEFAULT_SERVER=postgres
+      - ADMINER_DESIGN=hydra
+    networks:
+      - prs_network
+    depends_on:
+      - postgres
+
+  # Prometheus - Metrics Collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prs-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.external-url=https://${DOMAIN}/prometheus'
+      - '--web.route-prefix=/prometheus'
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - prs_network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/prometheus/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Grafana - Monitoring Dashboard
+  grafana:
+    image: grafana/grafana:latest
+    container_name: prs-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=https://${DOMAIN}/grafana
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - prs_network
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/grafana/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Node Exporter - System Metrics
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: prs-node-exporter
+    restart: unless-stopped
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    networks:
+      - prs_network
+    pid: host
+
+  # cAdvisor - Container Metrics
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: prs-cadvisor
+    restart: unless-stopped
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks:
+      - prs_network
+
+networks:
+  prs_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  nginx_cache:
+    driver: local
+  portainer_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
