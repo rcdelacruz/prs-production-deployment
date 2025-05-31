@@ -1,0 +1,266 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: prs-ingress
+  namespace: prs-production
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+      more_set_headers "Referrer-Policy: strict-origin-when-cross-origin";
+      more_set_headers "Strict-Transport-Security: max-age=31536000; includeSubDomains; preload";
+    nginx.ingress.kubernetes.io/server-snippet: |
+      gzip on;
+      gzip_vary on;
+      gzip_min_length 10240;
+      gzip_proxied expired no-cache no-store private must-revalidate auth;
+      gzip_types text/plain text/css text/xml text/javascript application/javascript application/xml+rss application/json image/svg+xml;
+spec:
+  tls:
+  - hosts:
+    - your-domain.com
+    - api.your-domain.com
+    - monitoring.your-domain.com
+    secretName: prs-tls-secret
+  rules:
+  # Main Application
+  - host: your-domain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: prs-frontend
+            port:
+              number: 80
+  - host: www.your-domain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: prs-frontend
+            port:
+              number: 80
+  # API Endpoints
+  - host: api.your-domain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: prs-backend
+            port:
+              number: 4000
+  # Monitoring Dashboard
+  - host: monitoring.your-domain.com
+    http:
+      paths:
+      - path: /grafana
+        pathType: Prefix
+        backend:
+          service:
+            name: grafana
+            port:
+              number: 3000
+      - path: /prometheus
+        pathType: Prefix
+        backend:
+          service:
+            name: prometheus
+            port:
+              number: 9090
+      - path: /alertmanager
+        pathType: Prefix
+        backend:
+          service:
+            name: alertmanager
+            port:
+              number: 9093
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: prs-api-rate-limited
+  namespace: prs-production
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rate-limit: "5"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: basic-auth
+    nginx.ingress.kubernetes.io/auth-realm: 'Authentication Required - Admin Area'
+spec:
+  tls:
+  - hosts:
+    - api.your-domain.com
+    secretName: prs-tls-secret
+  rules:
+  - host: api.your-domain.com
+    http:
+      paths:
+      - path: /admin
+        pathType: Prefix
+        backend:
+          service:
+            name: prs-backend
+            port:
+              number: 4000
+      - path: /auth
+        pathType: Prefix
+        backend:
+          service:
+            name: prs-backend
+            port:
+              number: 4000
+      - path: /login
+        pathType: Prefix
+        backend:
+          service:
+            name: prs-backend
+            port:
+              number: 4000
+      - path: /register
+        pathType: Prefix
+        backend:
+          service:
+            name: prs-backend
+            port:
+              number: 4000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: prs-network-policy
+  namespace: prs-production
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow ingress from nginx ingress controller
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+  # Allow inter-pod communication within namespace
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: prs-production
+  # Allow monitoring from prometheus
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 4000
+  egress:
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+  # Allow HTTPS traffic to external services
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+  # Allow database connections
+  - to:
+    - podSelector:
+        matchLabels:
+          app: postgres
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow Redis connections
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  # Allow MinIO connections
+  - to:
+    - podSelector:
+        matchLabels:
+          app: minio
+    ports:
+    - protocol: TCP
+      port: 9000
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: basic-auth
+  namespace: prs-production
+  annotations:
+    description: "Basic auth credentials for admin endpoints"
+type: Opaque
+data:
+  # admin:$2y$10$... (bcrypt hash of admin password)
+  # Generate with: htpasswd -nb admin password | base64 -w 0
+  auth: YWRtaW46JDJ5JDEwJE5uQ1FuNWh1blhBNGJHMzhXNXltRi5mS25HRGFFNVNPbW1VcnFncmpqUHlnNU1vRS9WRWlT
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: prs-health-checks
+  namespace: prs-production
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/rewrite-target: /$1
+spec:
+  rules:
+  - host: your-domain.com
+    http:
+      paths:
+      - path: /health
+        pathType: Exact
+        backend:
+          service:
+            name: prs-backend
+            port:
+              number: 4000
+  - host: api.your-domain.com
+    http:
+      paths:
+      - path: /health
+        pathType: Exact
+        backend:
+          service:
+            name: prs-backend
+            port:
+              number: 4000
+      - path: /ready
+        pathType: Exact
+        backend:
+          service:
+            name: prs-backend
+            port:
+              number: 4000
+      - path: /metrics
+        pathType: Exact
+        backend:
+          service:
+            name: prs-backend
+            port:
+              number: 4000
