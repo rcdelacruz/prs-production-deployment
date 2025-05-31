@@ -59,6 +59,185 @@ nano .env  # Edit for your environment
 ./scripts/deploy.sh
 ```
 
+## Architecture Overview
+
+### Production Cluster Architecture
+
+```mermaid
+graph TB
+    subgraph "Internet/CDN"
+        Internet[🌐 Internet Traffic]
+        LB[⚖️ Load Balancer<br/>HAProxy/Cloud LB]
+    end
+    
+    subgraph "Production Cluster"
+        subgraph "Frontend Tier"
+            Nginx1[🌐 Nginx Proxy 1]
+            Nginx2[🌐 Nginx Proxy 2]
+            Frontend1[⚛️ Frontend 1]
+            Frontend2[⚛️ Frontend 2]
+        end
+        
+        subgraph "Application Tier"
+            API1[🚀 Backend API 1]
+            API2[🚀 Backend API 2]
+            API3[🚀 Backend API 3]
+        end
+        
+        subgraph "Data Tier"
+            PG_Primary[(🗄️ PostgreSQL<br/>Primary)]
+            PG_Replica[(🗄️ PostgreSQL<br/>Replica)]
+            Redis1[(🔴 Redis 1)]
+            Redis2[(🔴 Redis 2)]
+            MinIO1[(📦 MinIO 1)]
+            MinIO2[(📦 MinIO 2)]
+        end
+        
+        subgraph "Monitoring Tier"
+            Prometheus[📊 Prometheus]
+            Grafana[📈 Grafana]
+            Loki[📝 Loki]
+            AlertManager[🚨 AlertManager]
+        end
+    end
+    
+    subgraph "External Storage"
+        S3[(☁️ Cloud Storage<br/>S3/Backup)]
+    end
+    
+    Internet --> LB
+    LB --> Nginx1
+    LB --> Nginx2
+    Nginx1 --> Frontend1
+    Nginx2 --> Frontend2
+    Nginx1 --> API1
+    Nginx2 --> API2
+    Nginx1 --> API3
+    
+    API1 --> PG_Primary
+    API2 --> PG_Primary
+    API3 --> PG_Primary
+    PG_Primary --> PG_Replica
+    
+    API1 --> Redis1
+    API2 --> Redis2
+    API3 --> Redis1
+    
+    API1 --> MinIO1
+    API2 --> MinIO2
+    API3 --> MinIO1
+    
+    Prometheus --> API1
+    Prometheus --> API2
+    Prometheus --> API3
+    Grafana --> Prometheus
+    Loki --> AlertManager
+    
+    PG_Primary -.-> S3
+    MinIO1 -.-> S3
+    
+    classDef internetClass fill:#e3f2fd,stroke:#0277bd,stroke-width:2px
+    classDef frontendClass fill:#e8f5e8,stroke:#388e3c,stroke-width:2px
+    classDef apiClass fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef dataClass fill:#fce4ec,stroke:#c2185b,stroke-width:2px
+    classDef monitorClass fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef storageClass fill:#e0f2f1,stroke:#00695c,stroke-width:2px
+    
+    class Internet,LB internetClass
+    class Nginx1,Nginx2,Frontend1,Frontend2 frontendClass
+    class API1,API2,API3 apiClass
+    class PG_Primary,PG_Replica,Redis1,Redis2,MinIO1,MinIO2 dataClass
+    class Prometheus,Grafana,Loki,AlertManager monitorClass
+    class S3 storageClass
+```
+
+### Single Node Architecture
+
+```mermaid
+graph TB
+    subgraph "Internal Network (LAN/VPN)"
+        Users[👥 Internal Users<br/>192.168.1.100]
+    end
+    
+    subgraph "Single Server"
+        subgraph "Proxy Layer"
+            Nginx[🌐 Nginx Proxy<br/>:80/:443]
+        end
+        
+        subgraph "Application Stack"
+            Frontend[⚛️ React Frontend<br/>Static Files]
+            Backend[🚀 Node.js API<br/>:4000]
+            Postgres[(🗄️ PostgreSQL<br/>:5432)]
+        end
+        
+        subgraph "Management Tools"
+            Portainer[📦 Portainer<br/>Container Mgmt]
+            Adminer[🔧 Adminer<br/>DB Management]
+            Grafana[📊 Grafana<br/>Monitoring]
+            Prometheus[📈 Prometheus<br/>Metrics]
+        end
+    end
+    
+    subgraph "NAS Storage"
+        NAS[(💾 Network Storage<br/>Database + Files + Backups)]
+    end
+    
+    Users --> Nginx
+    Nginx --> Frontend
+    Nginx --> Backend
+    Nginx --> Portainer
+    Nginx --> Adminer
+    Nginx --> Grafana
+    
+    Backend --> Postgres
+    Grafana --> Prometheus
+    Prometheus --> Backend
+    
+    Postgres -.->|Mount| NAS
+    Backend -.->|Files| NAS
+    
+    classDef userClass fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef proxyClass fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef appClass fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
+    classDef mgmtClass fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef storageClass fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+    
+    class Users userClass
+    class Nginx proxyClass
+    class Frontend,Backend,Postgres appClass
+    class Portainer,Adminer,Grafana,Prometheus mgmtClass
+    class NAS storageClass
+```
+
+## Deployment Decision Matrix
+
+```mermaid
+flowchart TD
+    Start([🤔 Which Deployment?]) --> Q1{Organization Size?}
+    
+    Q1 -->|Large<br/>100+ Users| Q2{High Availability<br/>Required?}
+    Q1 -->|Small/Medium<br/>< 100 Users| Q3{Budget Constraints?}
+    
+    Q2 -->|Yes<br/>Mission Critical| Prod[🏢 Production Cluster<br/>✅ Kubernetes/Swarm<br/>✅ Multi-node HA<br/>✅ Auto-scaling]
+    Q2 -->|No<br/>Can Handle Downtime| Q3
+    
+    Q3 -->|High<br/>Enterprise Budget| Prod
+    Q3 -->|Low<br/>Cost Conscious| Q4{Internal Network<br/>Only?}
+    
+    Q4 -->|Yes<br/>LAN/VPN Access| Single[🏠 Single Node<br/>✅ Simple Setup<br/>✅ NAS Storage<br/>✅ Easy Maintenance]
+    Q4 -->|No<br/>Internet Facing| Prod
+    
+    classDef startClass fill:#e1f5fe,stroke:#01579b,stroke-width:3px
+    classDef questionClass fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef prodClass fill:#e8f5e8,stroke:#1b5e20,stroke-width:3px
+    classDef singleClass fill:#fce4ec,stroke:#880e4f,stroke-width:3px
+    
+    class Start startClass
+    class Q1,Q2,Q3,Q4 questionClass
+    class Prod prodClass
+    class Single singleClass
+```
+
 ## Feature Comparison
 
 | Feature | Production Cluster | Single Node |
@@ -77,28 +256,6 @@ nano .env  # Edit for your environment
 | **Database Management** | ✅ Clustered | ✅ Single instance |
 | **Setup Time** | 2-4 hours | 30-60 minutes |
 | **Maintenance** | Medium complexity | Low complexity |
-
-## Architecture Overview
-
-### Production Cluster Architecture
-```
-[Internet] → [Load Balancer] → [Nginx Proxy Cluster]
-                                    ↓
-            [Backend API Cluster] ← → [Frontend Cluster]
-                    ↓
-[PostgreSQL Cluster] + [Redis Cluster] + [MinIO Cluster]
-                    ↓
-        [Monitoring Stack] + [Backup System]
-```
-
-### Single Node Architecture
-```
-[Internet] → [Nginx Proxy] → [Frontend] + [Backend API]
-                                   ↓
-                    [PostgreSQL] + [Monitoring]
-                                   ↓
-                [NAS Storage] ← [Automated Backup]
-```
 
 ## Service Access
 
