@@ -4,17 +4,85 @@ This directory contains a simplified deployment configuration for **internal net
 
 ## Architecture
 
+```mermaid
+graph TB
+    subgraph "Internal Network (LAN/VPN)"
+        Users[👥 Internal Users<br/>LAN/VPN Access]
+    end
+    
+    subgraph "Single Server (192.168.1.100)"
+        subgraph "Nginx Proxy :80/443"
+            Nginx[🌐 Nginx<br/>SSL Termination<br/>Reverse Proxy]
+        end
+        
+        subgraph "Application Services"
+            Frontend[⚛️ React Frontend<br/>Static Files]
+            Backend[🚀 Node.js API<br/>Business Logic]
+            Postgres[🗄️ PostgreSQL<br/>Database]
+        end
+        
+        subgraph "Management Tools"
+            Portainer[📦 Portainer<br/>Container Mgmt]
+            Adminer[🔧 Adminer<br/>DB Management]
+            Grafana[📊 Grafana<br/>Monitoring]
+            Prometheus[📈 Prometheus<br/>Metrics]
+        end
+    end
+    
+    subgraph "NAS Storage"
+        NAS[(💾 Network Storage<br/>Database + Files + Backups)]
+    end
+    
+    Users --> Nginx
+    Nginx --> Frontend
+    Nginx --> Backend
+    Nginx --> Portainer
+    Nginx --> Adminer
+    Nginx --> Grafana
+    
+    Backend --> Postgres
+    Grafana --> Prometheus
+    Prometheus --> Backend
+    Prometheus --> Postgres
+    
+    Postgres -.-> NAS
+    Backend -.-> NAS
+    
+    classDef userClass fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef serverClass fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef appClass fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
+    classDef mgmtClass fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef storageClass fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+    
+    class Users userClass
+    class Nginx serverClass
+    class Frontend,Backend,Postgres appClass
+    class Portainer,Adminer,Grafana,Prometheus mgmtClass
+    class NAS storageClass
 ```
-LAN/VPN Network → [Server :80/443] → Internal Services
-                         ├── Frontend App
-                         ├── Backend API  
-                         ├── Portainer (Container Management)
-                         ├── Adminer (Database Management)
-                         └── Grafana (Monitoring)
 
-Storage Layout:
-├── SSD (OS + Containers)
-└── NAS (Database + Files + Backups)
+## Network Flow
+
+```mermaid
+sequenceDiagram
+    participant U as User (LAN/VPN)
+    participant N as Nginx Proxy
+    participant F as Frontend
+    participant B as Backend API
+    participant D as PostgreSQL
+    participant M as NAS Storage
+
+    U->>N: HTTPS Request (192.168.1.100)
+    N->>F: Route to Frontend
+    F->>U: Return React App
+    
+    U->>N: API Request (/api/*)
+    N->>B: Route to Backend
+    B->>D: Database Query
+    D->>M: Store/Retrieve Data
+    D->>B: Return Data
+    B->>N: JSON Response
+    N->>U: Return Response
 ```
 
 ## Network Access
@@ -44,14 +112,10 @@ Storage Layout:
    cd prs-production-deployment/onprem-single-node
    ```
 
-2. **Configure storage**:
+2. **Validate setup**:
    ```bash
-   # Mount NAS storage
-   sudo mkdir -p /mnt/nas
-   sudo mount -t nfs your-nas-server.local:/volume1/prs /mnt/nas
-   
-   # Setup directories
-   ./scripts/deploy.sh setup-storage
+   # Check prerequisites and configuration
+   ./scripts/validate-setup.sh
    ```
 
 3. **Configure environment**:
@@ -150,11 +214,30 @@ onprem-single-node/
 
 ## Storage Configuration
 
-- **OS & Containers**: Local SSD (`/var/lib/docker`)
-- **Database**: NAS (`/mnt/nas/database`)
-- **Uploads**: NAS (`/mnt/nas/uploads`) 
-- **Backups**: NAS (`/mnt/nas/backups`)
-- **Logs**: NAS (`/mnt/nas/logs`)
+```mermaid
+graph LR
+    subgraph "Local Server"
+        SSD[💿 Local SSD<br/>OS + Containers<br/>/var/lib/docker]
+    end
+    
+    subgraph "NAS Storage (/mnt/nas)"
+        DB[(🗄️ Database<br/>/mnt/nas/database)]
+        Files[📁 Uploads<br/>/mnt/nas/uploads]
+        Backups[💾 Backups<br/>/mnt/nas/backups]
+        Logs[📝 Logs<br/>/mnt/nas/logs]
+    end
+    
+    SSD -.->|Mount| DB
+    SSD -.->|Mount| Files
+    SSD -.->|Mount| Backups
+    SSD -.->|Mount| Logs
+    
+    classDef ssdClass fill:#e3f2fd,stroke:#0277bd,stroke-width:2px
+    classDef nasClass fill:#e8f5e8,stroke:#388e3c,stroke-width:2px
+    
+    class SSD ssdClass
+    class DB,Files,Backups,Logs nasClass
+```
 
 ## Internal DNS Setup (Optional)
 
@@ -178,6 +261,43 @@ For remote users, configure VPN access:
 4. **Same Experience**: Identical to LAN access
 
 ## Backup Strategy
+
+```mermaid
+graph TD
+    subgraph "Backup Sources"
+        A[🗄️ PostgreSQL Database]
+        B[📁 Uploaded Files]
+        C[⚙️ Configuration Files]
+        D[📝 Application Logs]
+    end
+    
+    subgraph "Backup Process"
+        E[🔄 Daily Automated Backup<br/>./scripts/backup.sh]
+    end
+    
+    subgraph "Storage Locations"
+        F[💾 Primary: NAS Storage<br/>/mnt/nas/backups]
+        G[🏢 Secondary: Internal Backup Server<br/>Optional]
+        H[🔒 Offsite: Encrypted External<br/>Optional]
+    end
+    
+    A --> E
+    B --> E
+    C --> E
+    D --> E
+    
+    E --> F
+    F -.-> G
+    G -.-> H
+    
+    classDef sourceClass fill:#e8f5e8,stroke:#388e3c,stroke-width:2px
+    classDef processClass fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef storageClass fill:#e1f5fe,stroke:#0288d1,stroke-width:2px
+    
+    class A,B,C,D sourceClass
+    class E processClass
+    class F,G,H storageClass
+```
 
 **Internal Network Backups:**
 - Daily automated backups to NAS
