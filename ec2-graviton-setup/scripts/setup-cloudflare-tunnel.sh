@@ -175,8 +175,23 @@ deploy_with_tunnel() {
 
     cd "$PROJECT_DIR"
 
-    # Deploy with cloudflare profile
-    docker-compose --profile cloudflare --profile monitoring up -d
+    # Use the main deployment script for proper service ordering
+    if [ -f "./scripts/deploy-ec2.sh" ]; then
+        log_info "Using main deployment script for proper service startup..."
+        ./scripts/deploy-ec2.sh deploy
+    else
+        log_warning "Main deployment script not found, using direct docker-compose..."
+        # Fallback to direct deployment with proper ordering
+        docker-compose up -d postgres
+        sleep 5
+        docker-compose up -d backend frontend
+        sleep 5
+        docker-compose up -d nginx adminer portainer
+        sleep 5
+        docker-compose --profile monitoring up -d
+        sleep 5
+        docker-compose --profile cloudflare up -d
+    fi
 
     log_success "PRS deployed with Cloudflare Tunnel"
 

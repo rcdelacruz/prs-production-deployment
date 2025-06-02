@@ -236,20 +236,43 @@ start_services() {
 
     cd "$PROJECT_DIR"
 
-    # Start core services
-    docker-compose up -d nginx backend frontend postgres adminer portainer
+    # Start core services first
+    log_info "Starting core services..."
+    docker-compose up -d postgres
+    sleep 5
+
+    docker-compose up -d backend frontend
+    sleep 5
+
+    docker-compose up -d nginx adminer portainer
+    sleep 5
 
     # Start monitoring services if enabled
     if [ "${PROMETHEUS_ENABLED:-true}" = "true" ] || [ "${GRAFANA_ENABLED:-true}" = "true" ]; then
         log_info "Starting monitoring services..."
         docker-compose --profile monitoring up -d
+        sleep 5
     fi
 
-    # Start Cloudflare Tunnel if token is provided
+    # Start Cloudflare Tunnel if token is provided (after all other services)
     if [ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]; then
         log_info "Starting Cloudflare Tunnel..."
-        docker-compose --profile cloudflare up -d
-        log_success "Cloudflare Tunnel started"
+        # Validate tunnel token format
+        if [[ "${CLOUDFLARE_TUNNEL_TOKEN}" =~ ^[A-Za-z0-9_-]+$ ]]; then
+            docker-compose --profile cloudflare up -d
+            sleep 3
+
+            # Check if tunnel started successfully
+            if docker ps | grep -q prs-ec2-cloudflared; then
+                log_success "Cloudflare Tunnel started successfully"
+            else
+                log_error "Cloudflare Tunnel failed to start. Check token and logs."
+                docker logs prs-ec2-cloudflared 2>/dev/null || log_warning "No tunnel logs available"
+            fi
+        else
+            log_error "Invalid Cloudflare Tunnel token format"
+            log_info "Services are only accessible via localhost or SSH tunnel."
+        fi
     else
         log_info "No Cloudflare Tunnel token provided. Skipping tunnel setup."
         log_info "Services are only accessible via localhost or SSH tunnel."
@@ -262,7 +285,9 @@ stop_services() {
     log_info "Stopping PRS production environment..."
 
     cd "$PROJECT_DIR"
-    docker-compose down
+
+    # Stop all profiles to ensure everything is stopped
+    docker-compose --profile cloudflare --profile monitoring down
 
     log_success "Services stopped"
 }
@@ -414,6 +439,7 @@ show_help() {
     echo "  import-db <file>    Import SQL dump file"
     echo "  ssl-setup           Setup internal SSL certificates"
     echo "  optimize            Optimize system for 4GB memory"
+    echo "  validate            Validate configuration before deployment"
     echo "  monitor             Monitor system resources"
     echo "  help                Show this help"
 }
@@ -423,6 +449,16 @@ case "${1:-deploy}" in
     "deploy")
         check_prerequisites
         load_environment
+
+        # Run validation first
+        if [ -f "$SCRIPT_DIR/validate-setup.sh" ]; then
+            log_info "Running pre-deployment validation..."
+            if ! "$SCRIPT_DIR/validate-setup.sh"; then
+                log_error "Validation failed. Please fix errors before deploying."
+                exit 1
+            fi
+        fi
+
         check_ports
         optimize_system
         setup_ssl_certificates
@@ -484,6 +520,14 @@ case "${1:-deploy}" in
         ;;
     "optimize")
         optimize_system
+        ;;
+    "validate")
+        if [ -f "$SCRIPT_DIR/validate-setup.sh" ]; then
+            "$SCRIPT_DIR/validate-setup.sh"
+        else
+            log_error "Validation script not found"
+            exit 1
+        fi
         ;;
     "monitor")
         monitor_resources
