@@ -1,0 +1,56 @@
+# Cloudflare Tunnel Configuration for PRS EC2
+# This file defines how Cloudflare Tunnel routes traffic to your services
+
+tunnel: your-tunnel-id
+credentials-file: /etc/cloudflared/credentials.json
+
+# Ingress rules - order matters!
+ingress:
+  # Main PRS Application
+  - hostname: your-domain.com
+    service: http://nginx:80
+    originRequest:
+      httpHostHeader: your-domain.com
+      noTLSVerify: true
+
+  # API subdomain (optional)
+  - hostname: api.your-domain.com
+    service: http://nginx:80
+    path: /api/*
+    originRequest:
+      httpHostHeader: your-domain.com
+      noTLSVerify: true
+
+  # Grafana Monitoring Dashboard
+  - hostname: grafana.your-domain.com
+    service: http://grafana:3000
+    originRequest:
+      httpHostHeader: grafana.your-domain.com
+      noTLSVerify: true
+
+  # Adminer Database Management
+  - hostname: adminer.your-domain.com
+    service: http://adminer:8080
+    originRequest:
+      httpHostHeader: adminer.your-domain.com
+      noTLSVerify: true
+
+  # Portainer Container Management (if added)
+  - hostname: portainer.your-domain.com
+    service: http://portainer:9000
+    originRequest:
+      httpHostHeader: portainer.your-domain.com
+      noTLSVerify: true
+
+  # Catch-all rule (must be last)
+  - service: http_status:404
+
+# Tunnel configuration
+warp-routing:
+  enabled: false
+
+# Logging
+loglevel: info
+
+# Metrics
+metrics: 0.0.0.0:2000

@@ -1,0 +1,118 @@
+# PRS Prometheus Configuration for EC2 Graviton
+# Optimized for 4GB memory and ARM64 architecture
+
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+  scrape_timeout: 10s
+  
+  # External labels for this Prometheus instance
+  external_labels:
+    monitor: 'prs-ec2-graviton'
+    environment: 'production'
+    instance_type: 't4g.medium'
+
+# Rule files
+rule_files:
+  # - "rules/*.yml"
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 30s
+    metrics_path: /prometheus/metrics
+
+  # PRS Backend API
+  - job_name: 'prs-backend'
+    static_configs:
+      - targets: ['backend:4000']
+    scrape_interval: 15s
+    metrics_path: /metrics
+    scrape_timeout: 10s
+    honor_labels: true
+    params:
+      format: ['prometheus']
+
+  # PRS Frontend (if it exposes metrics)
+  - job_name: 'prs-frontend'
+    static_configs:
+      - targets: ['frontend:3000']
+    scrape_interval: 30s
+    metrics_path: /metrics
+    scrape_timeout: 10s
+    honor_labels: true
+
+  # PostgreSQL Database (if postgres_exporter is added)
+  # - job_name: 'postgres'
+  #   static_configs:
+  #     - targets: ['postgres-exporter:9187']
+  #   scrape_interval: 30s
+
+  # Nginx (if nginx-prometheus-exporter is added)
+  # - job_name: 'nginx'
+  #   static_configs:
+  #     - targets: ['nginx-exporter:9113']
+  #   scrape_interval: 30s
+
+  # Docker containers health check
+  - job_name: 'docker-health'
+    static_configs:
+      - targets: 
+          - 'nginx:80'
+          - 'backend:4000'
+          - 'frontend:3000'
+          - 'postgres:5432'
+    scrape_interval: 30s
+    metrics_path: /health
+    scrape_timeout: 5s
+
+# Storage configuration (optimized for limited memory)
+storage:
+  tsdb:
+    # Reduce retention to save memory and disk space
+    retention.time: 3d
+    retention.size: 500MB
+    
+    # Optimize for ARM64 and limited memory
+    min-block-duration: 2h
+    max-block-duration: 25h
+    
+    # Reduce memory usage
+    head-chunks-write-queue-size: 1000
+
+# Remote write configuration (optional - for external monitoring)
+# remote_write:
+#   - url: "https://your-remote-prometheus.com/api/v1/write"
+#     basic_auth:
+#       username: "your-username"
+#       password: "your-password"
+
+# Alerting configuration (optional)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           - alertmanager:9093
+
+# Web configuration
+web:
+  # Enable admin API for management
+  enable-admin-api: false
+  
+  # Console configuration
+  console:
+    libraries: /etc/prometheus/console_libraries
+    templates: /etc/prometheus/consoles
+  
+  # External URL configuration
+  external-url: https://your-domain.com/prometheus/
+  route-prefix: /prometheus/
+
+# Feature flags for optimization
+feature_flags:
+  # Enable memory optimization features
+  - memory-snapshot-on-shutdown
+  - expand-external-labels
