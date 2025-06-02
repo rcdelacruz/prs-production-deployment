@@ -35,7 +35,7 @@ ingress:
       httpHostHeader: adminer.your-domain.com
       noTLSVerify: true
 
-  # Portainer Container Management (if added)
+  # Portainer Container Management
   - hostname: portainer.your-domain.com
     service: http://portainer:9000
     originRequest:

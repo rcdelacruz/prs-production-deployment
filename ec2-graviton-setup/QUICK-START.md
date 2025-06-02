@@ -53,12 +53,12 @@ JWT_SECRET=your-super-long-jwt-secret-key
 4. Copy tunnel token
 
 ### **Configure Hostnames**
-| Subdomain | Service | Port |
-|-----------|---------|------|
-| (root) | HTTP | localhost:80 |
-| grafana | HTTP | localhost:3001 |
-| adminer | HTTP | localhost:8080 |
-| portainer | HTTP | localhost:9000 |
+| Subdomain | Service | URL |
+|-----------|---------|-----|
+| (root) | HTTP | nginx:80 |
+| grafana | HTTP | grafana:3000 |
+| adminer | HTTP | adminer:8080 |
+| portainer | HTTP | portainer:9000 |
 
 ## 🔒 Security Checklist
 

@@ -20,10 +20,11 @@ services:
     networks:
       - prs_ec2_network
     healthcheck:
-      test: ["CMD", "nginx", "-t"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:80/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -303,9 +304,12 @@ services:
     networks:
       - prs_ec2_network
     depends_on:
-      - nginx
-      - adminer
-      - portainer
+      nginx:
+        condition: service_healthy
+      adminer:
+        condition: service_started
+      portainer:
+        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -313,6 +317,11 @@ services:
           cpus: '0.1'
     profiles:
       - cloudflare
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
 networks:
   prs_ec2_network:

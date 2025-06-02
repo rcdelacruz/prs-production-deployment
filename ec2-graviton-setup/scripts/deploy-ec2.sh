@@ -474,6 +474,7 @@ show_help() {
     echo "  ssl-setup           Setup internal SSL certificates"
     echo "  optimize            Optimize system for 4GB memory"
     echo "  validate            Validate configuration before deployment"
+    echo "  troubleshoot        Troubleshoot Cloudflare Tunnel issues"
     echo "  monitor             Monitor system resources"
     echo "  help                Show this help"
 }
@@ -560,6 +561,14 @@ case "${1:-deploy}" in
             "$SCRIPT_DIR/validate-setup.sh"
         else
             log_error "Validation script not found"
+            exit 1
+        fi
+        ;;
+    "troubleshoot")
+        if [ -f "$SCRIPT_DIR/troubleshoot-tunnel.sh" ]; then
+            "$SCRIPT_DIR/troubleshoot-tunnel.sh" "${2:-full}"
+        else
+            log_error "Troubleshooting script not found"
             exit 1
         fi
         ;;

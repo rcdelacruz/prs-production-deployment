@@ -85,10 +85,10 @@ This directory contains a complete production setup for the PRS application opti
 
    | Subdomain | Domain | Service Type | URL |
    |-----------|--------|--------------|-----|
-   | (leave empty) | your-domain.com | HTTP | localhost:80 |
-   | grafana | your-domain.com | HTTP | localhost:3001 |
-   | adminer | your-domain.com | HTTP | localhost:8080 |
-   | portainer | your-domain.com | HTTP | localhost:9000 |
+   | (leave empty) | your-domain.com | HTTP | nginx:80 |
+   | grafana | your-domain.com | HTTP | grafana:3000 |
+   | adminer | your-domain.com | HTTP | adminer:8080 |
+   | portainer | your-domain.com | HTTP | portainer:9000 |
 
    **Example URLs you'll get:**
    - Main App: `https://your-domain.com`
