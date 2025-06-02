@@ -236,23 +236,27 @@ start_services() {
 
     cd "$PROJECT_DIR"
 
-    # Start core services first
-    log_info "Starting core services..."
+    # Start database first
+    log_info "Starting database..."
     docker-compose up -d postgres
-    sleep 5
+    sleep 10
 
+    # Start backend and frontend
+    log_info "Starting backend and frontend..."
     docker-compose up -d backend frontend
-    sleep 5
+    sleep 10
 
-    docker-compose up -d nginx adminer portainer
-    sleep 5
-
-    # Start monitoring services if enabled
+    # Start monitoring services BEFORE nginx (nginx config references them)
     if [ "${PROMETHEUS_ENABLED:-true}" = "true" ] || [ "${GRAFANA_ENABLED:-true}" = "true" ]; then
-        log_info "Starting monitoring services..."
+        log_info "Starting monitoring services (required for nginx)..."
         docker-compose --profile monitoring up -d
-        sleep 5
+        sleep 10
     fi
+
+    # Now start nginx (after monitoring services are running)
+    log_info "Starting nginx and other services..."
+    docker-compose up -d nginx adminer portainer
+    sleep 10
 
     # Start Cloudflare Tunnel if token is provided (after all other services)
     if [ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]; then
@@ -260,7 +264,7 @@ start_services() {
         # Validate tunnel token format
         if [[ "${CLOUDFLARE_TUNNEL_TOKEN}" =~ ^[A-Za-z0-9_-]+$ ]]; then
             docker-compose --profile cloudflare up -d
-            sleep 3
+            sleep 5
 
             # Check if tunnel started successfully
             if docker ps | grep -q prs-ec2-cloudflared; then
