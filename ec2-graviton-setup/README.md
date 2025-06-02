@@ -13,74 +13,202 @@ This directory contains a complete production setup for the PRS application opti
 - **🔧 Auto-Optimization**: System tuning for optimal performance on limited resources
 - **🛡️ Enterprise Security**: Rate limiting, security headers, and access controls
 
-## 🚀 Quick Start
+## 🚀 Step-by-Step Setup Guide
 
-### 1. **Launch EC2 Instance**
+### **Step 1: Launch EC2 Instance**
 
-Launch an AWS EC2 Graviton instance:
-- **Instance Type**: t4g.medium (2 vCPU, 4GB RAM)
-- **AMI**: Amazon Linux 2 ARM64 or Ubuntu 20.04 ARM64
-- **Storage**: At least 20GB EBS volume
-- **Security Group**: SSH (22) only - web access via Cloudflare Tunnel
+1. **Create EC2 Instance**
+   - **Instance Type**: `t4g.medium` (2 vCPU, 4GB RAM, ARM64)
+   - **AMI**: Amazon Linux 2 ARM64 or Ubuntu 20.04 ARM64
+   - **Storage**: 20GB+ EBS volume (GP3 recommended)
+   - **Key Pair**: Select or create your SSH key pair
 
-### 2. **Initial Setup**
+2. **Configure Security Group (Minimal & Secure)**
+   ```
+   Inbound Rules:
+   - SSH (22) from YOUR_IP/32 only
 
-```bash
-# Connect to your EC2 instance
-ssh -i your-key.pem ec2-user@your-ec2-ip
+   Outbound Rules:
+   - All traffic (0.0.0.0/0)
+   ```
+   **⚠️ Important**: No web ports needed! Cloudflare Tunnel handles all web traffic securely.
 
-# Clone your repository
-git clone <your-prs-repository>
-cd prs/prs-production-deployment/ec2-graviton-setup
+3. **Launch Instance and Note Public IP**
 
-# Run the setup script (installs Docker, optimizes system)
-./scripts/setup-ec2.sh
-```
+### **Step 2: Initial Server Setup**
 
-### 3. **Configure Environment**
+1. **Connect to Your Instance**
+   ```bash
+   ssh -i your-key.pem ec2-user@YOUR_EC2_PUBLIC_IP
+   ```
 
-```bash
-# Copy and edit environment configuration
-cp .env.example .env
-nano .env
+2. **Clone Repository**
+   ```bash
+   git clone https://github.com/your-org/prs.git
+   cd prs/prs-production-deployment/ec2-graviton-setup
+   ```
 
-# Important settings to change:
-# - DOMAIN=your-domain.com
-# - POSTGRES_PASSWORD=your-strong-password
-# - JWT_SECRET=your-jwt-secret
-# - All other passwords and secrets
-```
+3. **Run Automated Setup**
+   ```bash
+   ./scripts/setup-ec2.sh
+   ```
+   This script will:
+   - ✅ Install Docker and Docker Compose
+   - ✅ Optimize system for 4GB memory
+   - ✅ Configure firewall and security
+   - ✅ Create swap file and tune kernel
+   - ✅ Install monitoring tools
 
-### 4. **Deploy Application**
+4. **Logout and Login Again** (to apply Docker group membership)
+   ```bash
+   exit
+   ssh -i your-key.pem ec2-user@YOUR_EC2_PUBLIC_IP
+   cd prs/prs-production-deployment/ec2-graviton-setup
+   ```
 
-```bash
-# Full deployment with automatic database import
-./scripts/deploy-ec2.sh deploy
+### **Step 3: Setup Cloudflare Tunnel**
 
-# Or step by step:
-./scripts/deploy-ec2.sh build    # Build ARM64 images
-./scripts/deploy-ec2.sh start    # Start services
-./scripts/deploy-ec2.sh status   # Check status
-```
+1. **Create Cloudflare Tunnel**
+   - Go to [Cloudflare Zero Trust Dashboard](https://one.dash.cloudflare.com/)
+   - Navigate to **Access > Tunnels**
+   - Click **"Create a tunnel"**
+   - Choose **"Cloudflared"**
+   - Name: `prs-ec2-tunnel`
+   - Click **"Save tunnel"**
 
-### 5. **Setup Cloudflare Tunnel** (Recommended)
+2. **Copy Tunnel Token**
+   - Copy the tunnel token from the dashboard
+   - Keep this safe - you'll need it in the next step
 
-```bash
-# Setup secure access via Cloudflare Tunnel
-./scripts/setup-cloudflare-tunnel.sh setup
+3. **Configure Public Hostnames in Cloudflare**
+   Add these hostnames in the tunnel configuration:
 
-# Follow the interactive prompts to:
-# 1. Create tunnel in Cloudflare dashboard
-# 2. Configure public hostnames
-# 3. Update Security Groups
-```
+   | Subdomain | Domain | Service Type | URL |
+   |-----------|--------|--------------|-----|
+   | (leave empty) | your-domain.com | HTTP | localhost:80 |
+   | grafana | your-domain.com | HTTP | localhost:3001 |
+   | adminer | your-domain.com | HTTP | localhost:8080 |
+   | portainer | your-domain.com | HTTP | localhost:9000 |
 
-### 6. **Import Database** (Optional)
+   **Example URLs you'll get:**
+   - Main App: `https://your-domain.com`
+   - Grafana: `https://grafana.your-domain.com`
+   - Adminer: `https://adminer.your-domain.com`
+   - Portainer: `https://portainer.your-domain.com`
 
-```bash
-# If you have a database dump file:
-./scripts/deploy-ec2.sh import-db your-dump-file.sql
-```
+### **Step 4: Configure Environment**
+
+1. **Create Environment File**
+   ```bash
+   cp .env.example .env
+   nano .env
+   ```
+
+2. **Essential Configuration** (Update these values):
+   ```bash
+   # Domain Configuration
+   DOMAIN=your-domain.com
+
+   # Cloudflare Tunnel
+   CLOUDFLARE_TUNNEL_TOKEN=your-tunnel-token-from-step-3
+
+   # Database Security (CHANGE THESE!)
+   POSTGRES_PASSWORD=your-super-strong-password-123!
+   POSTGRES_DB=prs_production
+   POSTGRES_USER=prs_user
+
+   # Application Security (GENERATE STRONG VALUES!)
+   JWT_SECRET=your-super-secure-jwt-secret-key-minimum-32-characters
+   ENCRYPTION_KEY=your-encryption-key-32-chars-minimum
+   OTP_KEY=your-base64-encoded-otp-key-64-bytes-minimum
+   PASS_SECRET=your-password-secret-key
+
+   # Admin User
+   ROOT_USER_NAME=admin
+   ROOT_USER_EMAIL=admin@your-domain.com
+   ROOT_USER_PASSWORD=your-admin-password-123!
+
+   # Monitoring
+   GRAFANA_ADMIN_PASSWORD=your-grafana-password-123!
+
+   # Security Settings
+   ENABLE_PUBLIC_ACCESS=false
+   BYPASS_OTP=false
+   ```
+
+### **Step 5: Deploy Application**
+
+1. **Full Deployment**
+   ```bash
+   ./scripts/deploy-ec2.sh deploy
+   ```
+   This will:
+   - ✅ Build ARM64 Docker images
+   - ✅ Generate SSL certificates (self-signed for internal use)
+   - ✅ Start all services (nginx, backend, frontend, postgres, adminer, portainer)
+   - ✅ Start monitoring (Grafana, Prometheus)
+   - ✅ Start Cloudflare Tunnel
+   - ✅ Initialize database or import existing dump
+
+2. **Check Deployment Status**
+   ```bash
+   ./scripts/deploy-ec2.sh status
+   ```
+
+### **Step 6: Import Database** (Optional)
+
+If you have an existing database dump:
+
+1. **Transfer Dump File to EC2**
+   ```bash
+   # From your local machine
+   scp -i your-key.pem your-dump-file.sql ec2-user@YOUR_EC2_IP:~/prs/prs-production-deployment/ec2-graviton-setup/
+   ```
+
+2. **Import Database**
+   ```bash
+   # On EC2 instance
+   ./scripts/deploy-ec2.sh import-db your-dump-file.sql
+   ```
+
+### **Step 7: Verify Deployment**
+
+1. **Check All Services**
+   ```bash
+   ./scripts/deploy-ec2.sh status
+   docker ps
+   ```
+
+2. **Test Access URLs**
+   - **Main Application**: https://your-domain.com
+   - **Grafana Dashboard**: https://grafana.your-domain.com (admin / your-grafana-password)
+   - **Database Admin**: https://adminer.your-domain.com
+   - **Container Management**: https://portainer.your-domain.com
+
+3. **Monitor Resources**
+   ```bash
+   ./scripts/deploy-ec2.sh monitor
+   # Or quick check:
+   monitor
+   ```
+
+### **Step 8: Final Security Steps**
+
+1. **Update AWS Security Group** (Remove any web ports if present)
+   - Ensure only SSH (22) is allowed from your IP
+   - Remove HTTP (80), HTTPS (443), or any other web ports
+
+2. **Verify No Public Access**
+   ```bash
+   # Check that services only bind to localhost
+   sudo netstat -tuln | grep 127.0.0.1
+   ```
+
+3. **Test Cloudflare Tunnel**
+   ```bash
+   # Check tunnel status
+   docker logs prs-ec2-cloudflared
+   ```
 
 ## 📋 Configuration
 
@@ -171,50 +299,45 @@ monitor                           # System status command
 ```bash
 ./scripts/deploy-ec2.sh build     # Rebuild ARM64 images
 ./scripts/deploy-ec2.sh optimize  # Re-run system optimizations
-./scripts/deploy-ec2.sh ssl-setup # Setup/renew SSL certificates
+./scripts/deploy-ec2.sh ssl-setup # Setup internal SSL certificates
 ```
 
 ## 🔒 Security Configuration
 
-### **SSL Certificates**
+### **Cloudflare Tunnel Security**
 
-For production, replace self-signed certificates with proper SSL:
+With Cloudflare Tunnel, SSL/TLS is handled automatically:
+- ✅ **Automatic SSL**: Cloudflare provides SSL certificates
+- ✅ **DDoS Protection**: Built-in protection from Cloudflare
+- ✅ **Zero Trust**: No public ports exposed
+- ✅ **Access Control**: Configure in Cloudflare dashboard
 
-```bash
-# Using Let's Encrypt (recommended)
-sudo apt install certbot
-sudo certbot certonly --standalone -d your-domain.com
+### **AWS Security Groups (Minimal)**
 
-# Copy certificates
-sudo cp /etc/letsencrypt/live/your-domain.com/fullchain.pem ssl/cert.pem
-sudo cp /etc/letsencrypt/live/your-domain.com/privkey.pem ssl/key.pem
+Your Security Group should only have:
+```
+Inbound Rules:
+- SSH (22) from YOUR_IP/32 only
 
-# Restart nginx
-./scripts/deploy-ec2.sh restart
+Outbound Rules:
+- All traffic (0.0.0.0/0)
 ```
 
-### **Security Groups**
+**⚠️ Important**: Remove any HTTP/HTTPS ports - they're not needed with Cloudflare Tunnel!
 
-Configure AWS Security Groups:
-- **Port 22**: SSH access (your IP only)
-- **Port 80**: HTTP (redirect to HTTPS)
-- **Port 443**: HTTPS (public)
-- **Port 8080**: Adminer (your IP only)
-- **Port 3001**: Grafana (your IP only)
+### **Local Firewall**
 
-### **Firewall**
-
-The setup automatically configures local firewall rules.
+The setup automatically configures local firewall rules for additional security.
 
 ## 📊 Monitoring
 
 ### **Grafana Dashboard**
-- **URL**: http://your-domain.com:3001
+- **URL**: https://grafana.your-domain.com (via Cloudflare Tunnel)
 - **Username**: admin
 - **Password**: (set in .env GRAFANA_ADMIN_PASSWORD)
 
 ### **Prometheus Metrics**
-- **URL**: https://your-domain.com/prometheus
+- **URL**: https://your-domain.com/prometheus (via Cloudflare Tunnel)
 - **Retention**: 3 days (optimized for memory)
 - **Storage**: 500MB limit
 
@@ -272,13 +395,16 @@ docker restart prs-ec2-postgres
 ./scripts/deploy-ec2.sh import-db your-file.sql
 ```
 
-### **SSL Issues**
+### **Cloudflare Tunnel Issues**
 ```bash
-# Regenerate self-signed certificates
-./scripts/deploy-ec2.sh ssl-setup
+# Check tunnel status
+docker logs prs-ec2-cloudflared
 
-# Check certificate validity
-openssl x509 -in ssl/cert.pem -text -noout
+# Restart tunnel
+docker restart prs-ec2-cloudflared
+
+# Test tunnel connectivity
+./scripts/setup-cloudflare-tunnel.sh status
 ```
 
 ## 🎯 Performance Tips
@@ -319,6 +445,39 @@ When you outgrow t4g.medium:
 4. **Consider RDS**: For database scaling
 5. **Load Balancer**: For multiple instances
 
+## 📝 Quick Reference
+
+### **Essential Commands**
+```bash
+# Deploy everything
+./scripts/deploy-ec2.sh deploy
+
+# Check status
+./scripts/deploy-ec2.sh status
+
+# View logs
+./scripts/deploy-ec2.sh logs
+
+# Import database
+./scripts/deploy-ec2.sh import-db file.sql
+
+# Monitor resources
+./scripts/deploy-ec2.sh monitor
+```
+
+### **Access URLs**
+- **Main App**: https://your-domain.com
+- **Grafana**: https://grafana.your-domain.com
+- **Adminer**: https://adminer.your-domain.com
+- **Portainer**: https://portainer.your-domain.com
+
+### **Security Checklist**
+- [ ] EC2 Security Group: SSH (22) only
+- [ ] Cloudflare Tunnel configured
+- [ ] Strong passwords in .env
+- [ ] Services bind to localhost only
+- [ ] No public web ports exposed
+
 ---
 
-**This setup provides a production-ready PRS environment optimized for AWS Graviton processors with 4GB memory!** 🚀
+**🎉 Congratulations! You now have a secure, production-ready PRS environment on AWS Graviton with Cloudflare Tunnel protection!** 🚀🔒

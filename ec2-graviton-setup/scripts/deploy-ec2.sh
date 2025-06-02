@@ -129,26 +129,39 @@ check_ports() {
 }
 
 setup_ssl_certificates() {
-    log_info "Setting up SSL certificates..."
+    log_info "Setting up SSL certificates for internal nginx..."
 
     SSL_DIR="$PROJECT_DIR/ssl"
     mkdir -p "$SSL_DIR"
 
     if [ ! -f "$SSL_DIR/cert.pem" ] || [ ! -f "$SSL_DIR/key.pem" ]; then
-        log_info "Creating self-signed SSL certificate for development..."
-        log_warning "For production, replace with proper SSL certificates (Let's Encrypt recommended)"
+        if [ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]; then
+            log_info "Creating minimal self-signed certificates for internal nginx use..."
+            log_info "SSL termination is handled by Cloudflare Tunnel - these are for internal communication only"
+        else
+            log_info "Creating self-signed SSL certificates for local development..."
+            log_warning "For production without Cloudflare Tunnel, use proper SSL certificates"
+        fi
 
+        # Create a simple self-signed certificate without problematic extensions
         openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
             -keyout "$SSL_DIR/key.pem" \
             -out "$SSL_DIR/cert.pem" \
-            -subj "/C=US/ST=Cloud/L=EC2/O=PRS/OU=Production/CN=${DOMAIN}" \
-            -addext "subjectAltName=DNS:${DOMAIN},DNS:*.${DOMAIN},IP:$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)"
+            -subj "/C=US/ST=Cloud/L=EC2/O=PRS/OU=Internal/CN=localhost"
 
         # Generate DH parameters for better security
-        openssl dhparam -out "$SSL_DIR/dhparam.pem" 2048
+        if [ ! -f "$SSL_DIR/dhparam.pem" ]; then
+            log_info "Generating DH parameters (this may take a moment)..."
+            openssl dhparam -out "$SSL_DIR/dhparam.pem" 2048
+        fi
 
-        log_success "SSL certificates generated"
-        log_info "Certificate valid for: $DOMAIN"
+        log_success "Internal SSL certificates generated"
+
+        if [ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]; then
+            log_info "Public SSL is handled by Cloudflare Tunnel automatically"
+        else
+            log_info "Certificate valid for internal use only"
+        fi
     else
         log_info "SSL certificates already exist"
     fi
@@ -399,7 +412,7 @@ show_help() {
     echo "  build               Build Docker images for ARM64"
     echo "  init-db             Initialize database"
     echo "  import-db <file>    Import SQL dump file"
-    echo "  ssl-setup           Setup SSL certificates"
+    echo "  ssl-setup           Setup internal SSL certificates"
     echo "  optimize            Optimize system for 4GB memory"
     echo "  monitor             Monitor system resources"
     echo "  help                Show this help"
