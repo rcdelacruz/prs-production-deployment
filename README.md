@@ -4,7 +4,7 @@ Production deployment configuration and setup guide for PRS (Purchase Requisitio
 
 ## Deployment Options
 
-This repository provides **two deployment options** to meet different infrastructure needs:
+This repository provides **three deployment options** to meet different infrastructure and development needs:
 
 ### 🏢 Production Cluster Deployment
 **For enterprise environments with high availability requirements**
@@ -27,6 +27,17 @@ This repository provides **two deployment options** to meet different infrastruc
 - **Use Case**: Small teams, departmental deployments, budget-conscious setups
 
 [📖 **Single Node Setup Guide**](./onprem-single-node/SETUP-GUIDE.md) | [📁 **Configuration Files**](./onprem-single-node/)
+
+### 💻 Local MacBook Development
+**For local development and testing on macOS**
+
+- **Path**: `/local-macbook-setup/`
+- **Technology**: Docker Desktop for Mac
+- **Architecture**: Local containers with Docker volumes
+- **Features**: No root privileges, alternative ports, development-optimized
+- **Use Case**: Local development, testing, learning, demos
+
+[📖 **MacBook Setup Guide**](./local-macbook-setup/SETUP-GUIDE.md) | [📁 **Configuration Files**](./local-macbook-setup/) | [🔄 **Comparison**](./local-macbook-setup/COMPARISON.md)
 
 ## Quick Start
 
@@ -59,6 +70,22 @@ nano .env  # Edit for your environment
 ./scripts/deploy.sh
 ```
 
+### For Local MacBook Development
+
+```bash
+# Clone repository
+git clone https://github.com/rcdelacruz/prs-production-deployment.git
+cd prs-production-deployment/local-macbook-setup
+
+# Configure environment (optional)
+cp .env.example .env
+
+# Deploy locally (uses ports 8080/8443)
+./scripts/deploy-local.sh
+
+# Access at https://localhost:8443
+```
+
 ## Architecture Overview
 
 ### Production Cluster Architecture
@@ -69,7 +96,7 @@ graph TB
         Internet[🌐 Internet Traffic]
         LB[⚖️ Load Balancer<br/>HAProxy/Cloud LB]
     end
-    
+
     subgraph "Production Cluster"
         subgraph "Frontend Tier"
             Nginx1[🌐 Nginx Proxy 1]
@@ -77,13 +104,13 @@ graph TB
             Frontend1[⚛️ Frontend 1]
             Frontend2[⚛️ Frontend 2]
         end
-        
+
         subgraph "Application Tier"
             API1[🚀 Backend API 1]
             API2[🚀 Backend API 2]
             API3[🚀 Backend API 3]
         end
-        
+
         subgraph "Data Tier"
             PG_Primary[(🗄️ PostgreSQL<br/>Primary)]
             PG_Replica[(🗄️ PostgreSQL<br/>Replica)]
@@ -92,7 +119,7 @@ graph TB
             MinIO1[(📦 MinIO 1)]
             MinIO2[(📦 MinIO 2)]
         end
-        
+
         subgraph "Monitoring Tier"
             Prometheus[📊 Prometheus]
             Grafana[📈 Grafana]
@@ -100,11 +127,11 @@ graph TB
             AlertManager[🚨 AlertManager]
         end
     end
-    
+
     subgraph "External Storage"
         S3[(☁️ Cloud Storage<br/>S3/Backup)]
     end
-    
+
     Internet --> LB
     LB --> Nginx1
     LB --> Nginx2
@@ -113,36 +140,36 @@ graph TB
     Nginx1 --> API1
     Nginx2 --> API2
     Nginx1 --> API3
-    
+
     API1 --> PG_Primary
     API2 --> PG_Primary
     API3 --> PG_Primary
     PG_Primary --> PG_Replica
-    
+
     API1 --> Redis1
     API2 --> Redis2
     API3 --> Redis1
-    
+
     API1 --> MinIO1
     API2 --> MinIO2
     API3 --> MinIO1
-    
+
     Prometheus --> API1
     Prometheus --> API2
     Prometheus --> API3
     Grafana --> Prometheus
     Loki --> AlertManager
-    
+
     PG_Primary -.-> S3
     MinIO1 -.-> S3
-    
+
     classDef internetClass fill:#e3f2fd,stroke:#0277bd,stroke-width:2px
     classDef frontendClass fill:#e8f5e8,stroke:#388e3c,stroke-width:2px
     classDef apiClass fill:#fff3e0,stroke:#f57c00,stroke-width:2px
     classDef dataClass fill:#fce4ec,stroke:#c2185b,stroke-width:2px
     classDef monitorClass fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
     classDef storageClass fill:#e0f2f1,stroke:#00695c,stroke-width:2px
-    
+
     class Internet,LB internetClass
     class Nginx1,Nginx2,Frontend1,Frontend2 frontendClass
     class API1,API2,API3 apiClass
@@ -158,18 +185,18 @@ graph TB
     subgraph "Internal Network (LAN/VPN)"
         Users[👥 Internal Users<br/>192.168.1.100]
     end
-    
+
     subgraph "Single Server"
         subgraph "Proxy Layer"
             Nginx[🌐 Nginx Proxy<br/>:80/:443]
         end
-        
+
         subgraph "Application Stack"
             Frontend[⚛️ React Frontend<br/>Static Files]
             Backend[🚀 Node.js API<br/>:4000]
             Postgres[(🗄️ PostgreSQL<br/>:5432)]
         end
-        
+
         subgraph "Management Tools"
             Portainer[📦 Portainer<br/>Container Mgmt]
             Adminer[🔧 Adminer<br/>DB Management]
@@ -177,31 +204,31 @@ graph TB
             Prometheus[📈 Prometheus<br/>Metrics]
         end
     end
-    
+
     subgraph "NAS Storage"
         NAS[(💾 Network Storage<br/>Database + Files + Backups)]
     end
-    
+
     Users --> Nginx
     Nginx --> Frontend
     Nginx --> Backend
     Nginx --> Portainer
     Nginx --> Adminer
     Nginx --> Grafana
-    
+
     Backend --> Postgres
     Grafana --> Prometheus
     Prometheus --> Backend
-    
+
     Postgres -.->|Mount| NAS
     Backend -.->|Files| NAS
-    
+
     classDef userClass fill:#e1f5fe,stroke:#01579b,stroke-width:2px
     classDef proxyClass fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
     classDef appClass fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
     classDef mgmtClass fill:#fff3e0,stroke:#e65100,stroke-width:2px
     classDef storageClass fill:#fce4ec,stroke:#880e4f,stroke-width:2px
-    
+
     class Users userClass
     class Nginx proxyClass
     class Frontend,Backend,Postgres appClass
@@ -214,24 +241,24 @@ graph TB
 ```mermaid
 flowchart TD
     Start([🤔 Which Deployment?]) --> Q1{Organization Size?}
-    
+
     Q1 -->|Large<br/>100+ Users| Q2{High Availability<br/>Required?}
     Q1 -->|Small/Medium<br/>< 100 Users| Q3{Budget Constraints?}
-    
+
     Q2 -->|Yes<br/>Mission Critical| Prod[🏢 Production Cluster<br/>✅ Kubernetes/Swarm<br/>✅ Multi-node HA<br/>✅ Auto-scaling]
     Q2 -->|No<br/>Can Handle Downtime| Q3
-    
+
     Q3 -->|High<br/>Enterprise Budget| Prod
     Q3 -->|Low<br/>Cost Conscious| Q4{Internal Network<br/>Only?}
-    
+
     Q4 -->|Yes<br/>LAN/VPN Access| Single[🏠 Single Node<br/>✅ Simple Setup<br/>✅ NAS Storage<br/>✅ Easy Maintenance]
     Q4 -->|No<br/>Internet Facing| Prod
-    
+
     classDef startClass fill:#e1f5fe,stroke:#01579b,stroke-width:3px
     classDef questionClass fill:#fff3e0,stroke:#e65100,stroke-width:2px
     classDef prodClass fill:#e8f5e8,stroke:#1b5e20,stroke-width:3px
     classDef singleClass fill:#fce4ec,stroke:#880e4f,stroke-width:3px
-    
+
     class Start startClass
     class Q1,Q2,Q3,Q4 questionClass
     class Prod prodClass
@@ -261,16 +288,23 @@ flowchart TD
 
 ### Production Cluster
 - **Main App**: https://your-domain.com
-- **API**: https://api.your-domain.com  
+- **API**: https://api.your-domain.com
 - **Monitoring**: https://monitoring.your-domain.com
 - **Admin Tools**: Integrated in monitoring dashboard
 
-### Single Node  
+### Single Node
 - **Main App**: https://your-server/
 - **API**: https://your-server/api/
 - **Portainer**: https://your-server/portainer/
 - **Adminer**: https://your-server/adminer/
 - **Grafana**: https://your-server/grafana/
+
+### Local MacBook Development
+- **Main App**: https://localhost:8443/
+- **API**: https://localhost:8443/api/
+- **Portainer**: https://localhost:8443/portainer/
+- **Adminer**: https://localhost:8443/adminer/
+- **Grafana**: https://localhost:8443/grafana/
 
 ## Directory Structure
 
@@ -288,14 +322,24 @@ prs-production-deployment/
 ├── scripts/                   # Production deployment scripts
 ├── examples/                  # Production config examples
 │
-└── onprem-single-node/        # 🏠 SINGLE NODE SETUP
-    ├── README.md              # Single node overview
+├── onprem-single-node/        # 🏠 SINGLE NODE SETUP
+│   ├── README.md              # Single node overview
+│   ├── SETUP-GUIDE.md         # Complete setup guide
+│   ├── docker-compose.yml     # Simple container setup
+│   ├── .env.example          # Configuration template
+│   ├── nginx/                # Proxy configuration
+│   ├── scripts/              # Deployment scripts
+│   └── config/               # Service configurations
+│
+└── local-macbook-setup/       # 💻 LOCAL DEVELOPMENT SETUP
+    ├── README.md              # MacBook setup overview
     ├── SETUP-GUIDE.md         # Complete setup guide
-    ├── docker-compose.yml     # Simple container setup
-    ├── .env.example          # Configuration template
-    ├── nginx/                # Proxy configuration
-    ├── scripts/              # Deployment scripts
-    └── config/               # Service configurations
+    ├── COMPARISON.md          # vs Production comparison
+    ├── docker-compose.yml     # Local container setup
+    ├── .env.example          # Local configuration template
+    ├── nginx/                # Local proxy configuration
+    ├── scripts/              # Local deployment scripts
+    └── config/               # Local service configurations
 ```
 
 ## Requirements
@@ -316,11 +360,19 @@ prs-production-deployment/
 - **Network**: Basic networking
 - **Skills**: Basic Linux administration
 
+### Local MacBook Development
+- **Machine**: MacBook (M1/M2/M3 or Intel)
+- **CPU**: 2+ cores
+- **RAM**: 8+ GB (16+ recommended)
+- **Storage**: 20+ GB free space
+- **Software**: Docker Desktop for Mac
+- **Skills**: Basic command line usage
+
 ## Security Features
 
 Both deployments include:
 - ✅ SSL/TLS encryption
-- ✅ Security headers and rate limiting  
+- ✅ Security headers and rate limiting
 - ✅ Container isolation
 - ✅ Encrypted backups
 - ✅ Access logging and monitoring
@@ -394,7 +446,7 @@ Both deployments include:
 5. Decommission single node
 
 **From Production Cluster to Single Node:**
-1. Export application data and database  
+1. Export application data and database
 2. Set up single node environment
 3. Import data to single node
 4. Update configurations for single node

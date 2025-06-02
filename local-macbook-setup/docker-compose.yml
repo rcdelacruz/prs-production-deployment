@@ -1,0 +1,289 @@
+services:
+  # Nginx Reverse Proxy (Local Development)
+  nginx:
+    image: nginx:1.24-alpine
+    container_name: prs-local-nginx
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+      - "${HTTPS_PORT:-8443}:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/sites-enabled:/etc/nginx/sites-enabled:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - uploads_data:/var/www/uploads:ro
+      - nginx_cache:/var/cache/nginx
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - prs_local_network
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Backend API (Local Development)
+  backend:
+    image: prs-backend:${VERSION:-latest}
+    container_name: prs-local-backend
+    restart: unless-stopped
+    build:
+      context: ../../prs-backend
+      dockerfile: Dockerfile
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - PORT=4000
+      - HOST=0.0.0.0
+      - LOG_LEVEL=${LOG_LEVEL:-debug}
+
+      # Database configuration
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_PORT=5432
+      - DIALECT=${DIALECT:-postgres}
+      - DISABLE_SSL=true
+
+      # Database Pool Configuration
+      - POOL_MIN=${POOL_MIN:-0}
+      - POOL_MAX=${POOL_MAX:-5}
+      - POOL_ACQUIRE=${POOL_ACQUIRE:-30000}
+      - POOL_IDLE=${POOL_IDLE:-10000}
+      - POOL_EVICTION=${POOL_EVICTION:-20000}
+
+      # Application secrets
+      - JWT_SECRET=${JWT_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - OTP_KEY=${OTP_KEY}
+      - PASS_SECRET=${PASS_SECRET}
+      - BYPASS_OTP=${BYPASS_OTP:-true}
+
+      # CORS and API settings
+      - CORS_ORIGIN=${CORS_ORIGIN}
+      - CITYLAND_API_URL=${CITYLAND_API_URL}
+      - CITYLAND_ACCOUNTING_URL=${CITYLAND_ACCOUNTING_URL}
+
+      # File upload settings (local volume)
+      - UPLOAD_DRIVER=local
+      - UPLOAD_PATH=/app/uploads
+
+      # Monitoring
+      - PROMETHEUS_ENABLED=${PROMETHEUS_ENABLED:-true}
+      - LOKI_ENABLED=false
+
+      # Root user
+      - ROOT_USER_NAME=${ROOT_USER_NAME}
+      - ROOT_USER_EMAIL=${ROOT_USER_EMAIL}
+      - ROOT_USER_PASSWORD=${ROOT_USER_PASSWORD}
+
+      # Development settings
+      - ENABLE_DEBUG_LOGS=${ENABLE_DEBUG_LOGS:-true}
+    volumes:
+      - uploads_data:/app/uploads
+      - logs_data:/app/logs
+      # Uncomment for development hot reload
+      # - ../../prs-backend/src:/app/src:ro
+    depends_on:
+      - postgres
+    networks:
+      - prs_local_network
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"const http = require('http'); const req = http.request({hostname: 'localhost', port: 4000, path: '/', method: 'GET', timeout: 2000}, (res) => process.exit(res.statusCode < 500 ? 0 : 1)); req.on('error', () => process.exit(1)); req.end();\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: ${BACKEND_MEMORY_LIMIT:-512m}
+
+  # Frontend Application (Local Development)
+  frontend:
+    image: prs-frontend:${VERSION:-latest}
+    container_name: prs-local-frontend
+    restart: unless-stopped
+    build:
+      context: ../../prs-frontend
+      dockerfile: Dockerfile
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - VITE_APP_API_URL=https://${DOMAIN}:${HTTPS_PORT}/api
+      - VITE_APP_UPLOAD_URL=https://${DOMAIN}:${HTTPS_PORT}/api/upload
+      - VITE_APP_ENVIRONMENT=${VITE_APP_ENVIRONMENT:-development}
+      - VITE_APP_ENABLE_DEVTOOLS=${VITE_APP_ENABLE_DEVTOOLS:-true}
+    networks:
+      - prs_local_network
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"const http = require('http'); const req = http.request({hostname: 'localhost', port: 3000, path: '/', method: 'GET', timeout: 2000}, (res) => process.exit(res.statusCode < 500 ? 0 : 1)); req.on('error', () => process.exit(1)); req.end();\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: ${FRONTEND_MEMORY_LIMIT:-256m}
+
+  # PostgreSQL Database (Local Development)
+  postgres:
+    image: postgres:15-alpine
+    container_name: prs-local-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_INITDB_ARGS=--auth-local=md5
+    command: >
+      postgres
+      -c max_connections=50
+      -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-64MB}
+      -c effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-256MB}
+      -c work_mem=${POSTGRES_WORK_MEM:-2MB}
+      -c maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-16MB}
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=4MB
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c ssl=off
+      -c log_statement=mod
+      -c log_min_duration_statement=1000
+    volumes:
+      - database_data:/var/lib/postgresql/data
+    networks:
+      - prs_local_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: ${POSTGRES_MEMORY_LIMIT:-1g}
+
+  # Portainer - Container Management (Local)
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: prs-local-portainer
+    restart: unless-stopped
+    command: -H unix:///var/run/docker.sock
+    ports:
+      - "${PORTAINER_PORT:-9001}:9000"
+    environment:
+      - PORTAINER_DOCKER_ENDPOINT=unix:///var/run/docker.sock
+    volumes:
+      - ${DOCKER_SOCK_PATH:-/var/run/docker.sock}:/var/run/docker.sock
+      - portainer_data:/data
+    networks:
+      - prs_local_network
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9000/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Adminer - Database Management (Local)
+  adminer:
+    image: adminer:latest
+    container_name: prs-local-adminer
+    restart: unless-stopped
+    ports:
+      - "${ADMINER_PORT:-8082}:8080"
+    environment:
+      - ADMINER_DEFAULT_SERVER=postgres
+      - ADMINER_DESIGN=hydra
+    networks:
+      - prs_local_network
+    depends_on:
+      - postgres
+
+  # Prometheus - Metrics Collection (Local)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prs-local-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=7d'
+      - '--web.external-url=https://${DOMAIN}:${HTTPS_PORT}/prometheus'
+      - '--web.route-prefix=/prometheus'
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - prs_local_network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/prometheus/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - monitoring
+
+  # Grafana - Monitoring Dashboard (Local)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: prs-local-grafana
+    restart: unless-stopped
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://${DOMAIN}:${GRAFANA_PORT:-3001}
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./config/grafana/grafana.ini:/etc/grafana/grafana.ini:ro
+    networks:
+      - prs_local_network
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: ${GRAFANA_MEMORY_LIMIT:-256m}
+    profiles:
+      - monitoring
+
+networks:
+  prs_local_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${NETWORK_SUBNET:-172.21.0.0/16}
+
+volumes:
+  database_data:
+    driver: local
+  uploads_data:
+    driver: local
+  logs_data:
+    driver: local
+  nginx_cache:
+    driver: local
+  portainer_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
