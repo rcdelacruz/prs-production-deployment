@@ -5,7 +5,7 @@ global:
   scrape_interval: 30s
   evaluation_interval: 30s
   scrape_timeout: 10s
-  
+
   # External labels for this Prometheus instance
   external_labels:
     monitor: 'prs-ec2-graviton'
@@ -60,7 +60,7 @@ scrape_configs:
   # Docker containers health check
   - job_name: 'docker-health'
     static_configs:
-      - targets: 
+      - targets:
           - 'nginx:80'
           - 'backend:4000'
           - 'frontend:3000'
@@ -68,20 +68,6 @@ scrape_configs:
     scrape_interval: 30s
     metrics_path: /health
     scrape_timeout: 5s
-
-# Storage configuration (optimized for limited memory)
-storage:
-  tsdb:
-    # Reduce retention to save memory and disk space
-    retention.time: 3d
-    retention.size: 500MB
-    
-    # Optimize for ARM64 and limited memory
-    min-block-duration: 2h
-    max-block-duration: 25h
-    
-    # Reduce memory usage
-    head-chunks-write-queue-size: 1000
 
 # Remote write configuration (optional - for external monitoring)
 # remote_write:
@@ -96,23 +82,3 @@ storage:
 #     - static_configs:
 #         - targets:
 #           - alertmanager:9093
-
-# Web configuration
-web:
-  # Enable admin API for management
-  enable-admin-api: false
-  
-  # Console configuration
-  console:
-    libraries: /etc/prometheus/console_libraries
-    templates: /etc/prometheus/consoles
-  
-  # External URL configuration
-  external-url: https://your-domain.com/prometheus/
-  route-prefix: /prometheus/
-
-# Feature flags for optimization
-feature_flags:
-  # Enable memory optimization features
-  - memory-snapshot-on-shutdown
-  - expand-external-labels

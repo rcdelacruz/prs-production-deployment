@@ -7,39 +7,31 @@ credentials-file: /etc/cloudflared/credentials.json
 # Ingress rules - order matters!
 ingress:
   # Main PRS Application
-  - hostname: your-domain.com
+  - hostname: prs.stratpoint.io
     service: http://nginx:80
     originRequest:
-      httpHostHeader: your-domain.com
-      noTLSVerify: true
-
-  # API subdomain (optional)
-  - hostname: api.your-domain.com
-    service: http://nginx:80
-    path: /api/*
-    originRequest:
-      httpHostHeader: your-domain.com
+      httpHostHeader: prs.stratpoint.io
       noTLSVerify: true
 
   # Grafana Monitoring Dashboard
-  - hostname: grafana.your-domain.com
+  - hostname: grafana.stratpoint.io
     service: http://grafana:3000
     originRequest:
-      httpHostHeader: grafana.your-domain.com
+      httpHostHeader: grafana.stratpoint.io
       noTLSVerify: true
 
   # Adminer Database Management
-  - hostname: adminer.your-domain.com
+  - hostname: adminer.stratpoint.io
     service: http://adminer:8080
     originRequest:
-      httpHostHeader: adminer.your-domain.com
+      httpHostHeader: adminer.stratpoint.io
       noTLSVerify: true
 
   # Portainer Container Management
-  - hostname: portainer.your-domain.com
+  - hostname: portainer.stratpoint.io
     service: http://portainer:9000
     originRequest:
-      httpHostHeader: portainer.your-domain.com
+      httpHostHeader: portainer.stratpoint.io
       noTLSVerify: true
 
   # Catch-all rule (must be last)
