@@ -39,15 +39,15 @@ VALIDATION_WARNINGS=0
 
 validate_environment_file() {
     log_info "Validating environment file..."
-    
+
     if [ ! -f "$ENV_FILE" ]; then
         log_error ".env file not found. Run: cp .env.example .env"
         ((VALIDATION_ERRORS++))
         return
     fi
-    
+
     source "$ENV_FILE"
-    
+
     # Required variables
     local required_vars=(
         "DOMAIN"
@@ -57,31 +57,31 @@ validate_environment_file() {
         "ROOT_USER_PASSWORD"
         "GRAFANA_ADMIN_PASSWORD"
     )
-    
+
     for var in "${required_vars[@]}"; do
         if [ -z "${!var}" ]; then
             log_error "Required variable $var is not set in .env"
             ((VALIDATION_ERRORS++))
         fi
     done
-    
+
     # Password strength validation
     if [ ${#POSTGRES_PASSWORD} -lt 12 ]; then
         log_warning "POSTGRES_PASSWORD should be at least 12 characters"
         ((VALIDATION_WARNINGS++))
     fi
-    
+
     if [ ${#JWT_SECRET} -lt 32 ]; then
         log_error "JWT_SECRET must be at least 32 characters"
         ((VALIDATION_ERRORS++))
     fi
-    
+
     # Domain validation
     if [[ "$DOMAIN" == "your-domain.com" || "$DOMAIN" == "localhost" ]]; then
         log_warning "DOMAIN is set to default value. Update with your actual domain."
         ((VALIDATION_WARNINGS++))
     fi
-    
+
     # Cloudflare Tunnel validation
     if [ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]; then
         if [[ ! "${CLOUDFLARE_TUNNEL_TOKEN}" =~ ^[A-Za-z0-9_-]+$ ]]; then
@@ -94,22 +94,22 @@ validate_environment_file() {
         log_warning "CLOUDFLARE_TUNNEL_TOKEN not set. Services will only be accessible via SSH tunnel."
         ((VALIDATION_WARNINGS++))
     fi
-    
+
     log_success "Environment file validation completed"
 }
 
 validate_docker_compose() {
     log_info "Validating Docker Compose configuration..."
-    
+
     cd "$PROJECT_DIR"
-    
+
     # Check if docker-compose.yml exists
     if [ ! -f "docker-compose.yml" ]; then
         log_error "docker-compose.yml not found"
         ((VALIDATION_ERRORS++))
         return
     fi
-    
+
     # Validate docker-compose syntax
     if ! docker-compose config > /dev/null 2>&1; then
         log_error "Docker Compose configuration is invalid"
@@ -118,7 +118,7 @@ validate_docker_compose() {
     else
         log_success "Docker Compose configuration is valid"
     fi
-    
+
     # Check for required directories
     local required_dirs=(
         "nginx"
@@ -126,18 +126,38 @@ validate_docker_compose() {
         "config/prometheus"
         "ssl"
     )
-    
+
     for dir in "${required_dirs[@]}"; do
         if [ ! -d "$dir" ]; then
             log_error "Required directory $dir not found"
             ((VALIDATION_ERRORS++))
         fi
     done
+
+    # Check if backend source exists for database scripts
+    if [ ! -d "../../prs-backend" ]; then
+        log_warning "Backend source directory not found. Database initialization may fail."
+        log_info "Expected path: ../../prs-backend"
+        ((VALIDATION_WARNINGS++))
+    else
+        # Check if package.json has required scripts
+        if [ -f "../../prs-backend/package.json" ]; then
+            if ! grep -q '"migrate:dev"' "../../prs-backend/package.json"; then
+                log_error "Backend package.json missing migrate:dev script"
+                ((VALIDATION_ERRORS++))
+            fi
+            if ! grep -q '"seed:dev"' "../../prs-backend/package.json"; then
+                log_error "Backend package.json missing seed:dev script"
+                ((VALIDATION_ERRORS++))
+            fi
+            log_success "Backend database scripts found"
+        fi
+    fi
 }
 
 validate_system_requirements() {
     log_info "Validating system requirements..."
-    
+
     # Check Docker
     if ! command -v docker &> /dev/null; then
         log_error "Docker is not installed"
@@ -145,7 +165,7 @@ validate_system_requirements() {
     else
         log_success "Docker is installed"
     fi
-    
+
     # Check Docker Compose
     if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
         log_error "Docker Compose is not installed"
@@ -153,7 +173,7 @@ validate_system_requirements() {
     else
         log_success "Docker Compose is installed"
     fi
-    
+
     # Check if Docker is running
     if ! docker info &> /dev/null; then
         log_error "Docker is not running"
@@ -161,7 +181,7 @@ validate_system_requirements() {
     else
         log_success "Docker is running"
     fi
-    
+
     # Check memory
     TOTAL_MEM=$(free -m | awk 'NR==2{printf "%.0f", $2}')
     if [ "$TOTAL_MEM" -lt 3500 ]; then
@@ -170,7 +190,7 @@ validate_system_requirements() {
     else
         log_success "Memory check passed: ${TOTAL_MEM}MB available"
     fi
-    
+
     # Check disk space
     DISK_SPACE=$(df -h / | awk 'NR==2 {print $4}' | sed 's/G//')
     if [ "${DISK_SPACE%.*}" -lt 10 ]; then
@@ -183,10 +203,10 @@ validate_system_requirements() {
 
 validate_network_configuration() {
     log_info "Validating network configuration..."
-    
+
     # Check if ports are available (only if public access is enabled)
     source "$ENV_FILE" 2>/dev/null || true
-    
+
     if [ "${ENABLE_PUBLIC_ACCESS:-false}" = "true" ]; then
         local ports=(80 443)
         for port in "${ports[@]}"; do
@@ -202,9 +222,9 @@ validate_network_configuration() {
 
 validate_ssl_setup() {
     log_info "Validating SSL setup..."
-    
+
     SSL_DIR="$PROJECT_DIR/ssl"
-    
+
     if [ ! -d "$SSL_DIR" ]; then
         log_info "SSL directory will be created during deployment"
     else
@@ -227,7 +247,7 @@ show_validation_summary() {
     echo "=================================="
     echo "    VALIDATION SUMMARY"
     echo "=================================="
-    
+
     if [ $VALIDATION_ERRORS -eq 0 ] && [ $VALIDATION_WARNINGS -eq 0 ]; then
         log_success "All validations passed! Ready for deployment."
         echo ""
@@ -253,22 +273,22 @@ show_validation_summary() {
 main() {
     log_info "Starting PRS EC2 setup validation..."
     echo ""
-    
+
     validate_system_requirements
     echo ""
-    
+
     validate_environment_file
     echo ""
-    
+
     validate_docker_compose
     echo ""
-    
+
     validate_network_configuration
     echo ""
-    
+
     validate_ssl_setup
     echo ""
-    
+
     show_validation_summary
 }
 

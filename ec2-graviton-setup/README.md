@@ -148,7 +148,7 @@ This directory contains a complete production setup for the PRS application opti
    - ✅ Start all services (nginx, backend, frontend, postgres, adminer, portainer)
    - ✅ Start monitoring (Grafana, Prometheus)
    - ✅ Start Cloudflare Tunnel
-   - ✅ Initialize database or import existing dump
+   - ✅ Initialize database with migrations and seeders
 
 2. **Check Deployment Status**
    ```bash
@@ -388,11 +388,23 @@ docker ps
 # Check database logs
 ./scripts/deploy-ec2.sh logs postgres
 
+# Check backend logs for database errors
+./scripts/deploy-ec2.sh logs backend
+
 # Restart database
 docker restart prs-ec2-postgres
 
+# Manually run database migrations
+docker-compose exec backend npm run migrate:dev
+
+# Manually run database seeders
+docker-compose exec backend npm run seed:dev
+
 # Re-import database
 ./scripts/deploy-ec2.sh import-db your-file.sql
+
+# Check database connection
+docker exec prs-ec2-postgres psql -U prs_user -d prs_production -c "SELECT version();"
 ```
 
 ### **Cloudflare Tunnel Issues**

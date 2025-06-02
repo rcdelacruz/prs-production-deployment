@@ -348,12 +348,46 @@ init_database() {
     log_info "Waiting for database to be ready..."
     sleep 15
 
-    # Run database migrations
+    # Check if backend container is running
     cd "$PROJECT_DIR"
-    docker-compose exec backend npm run sequelize:migrate:dev || true
-    docker-compose exec backend npm run sequelize:run:seeder:all:dev || true
+    if ! docker-compose ps backend | grep -q "Up"; then
+        log_error "Backend container is not running. Cannot initialize database."
+        return 1
+    fi
 
-    log_success "Database initialized"
+    # Determine which scripts to use based on NODE_ENV
+    local migrate_script="migrate:dev"
+    local seed_script="seed:dev"
+
+    # Load environment to check NODE_ENV
+    if [ -f "$PROJECT_DIR/.env" ]; then
+        source "$PROJECT_DIR/.env"
+        if [ "${NODE_ENV:-development}" = "production" ]; then
+            migrate_script="migrate:prod"
+            seed_script="seed:prod"
+            log_info "Using production database scripts"
+        else
+            log_info "Using development database scripts"
+        fi
+    fi
+
+    # Run database migrations using the correct script names from package.json
+    log_info "Running database migrations..."
+    if docker-compose exec -T backend npm run "$migrate_script"; then
+        log_success "Database migrations completed"
+    else
+        log_warning "Database migrations failed - this may be normal if already migrated"
+    fi
+
+    # Run database seeders using the correct script names from package.json
+    log_info "Running database seeders..."
+    if docker-compose exec -T backend npm run "$seed_script"; then
+        log_success "Database seeders completed"
+    else
+        log_warning "Database seeders failed - this may be normal if data already exists"
+    fi
+
+    log_success "Database initialization completed"
 }
 
 import_database() {
