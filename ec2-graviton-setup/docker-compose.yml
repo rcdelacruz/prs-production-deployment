@@ -18,7 +18,8 @@ services:
       - backend
       - frontend
     networks:
-      - prs_ec2_network
+      prs_ec2_network:
+        ipv4_address: 172.22.0.5
     healthcheck:
       test: ["CMD", "nginx", "-t"]
       interval: 30s
@@ -36,7 +37,7 @@ services:
     container_name: prs-ec2-backend
     restart: unless-stopped
     build:
-      context: ../../prs-backend
+      context: ../../prs-backend-a
       dockerfile: Dockerfile
     environment:
       - NODE_ENV=${NODE_ENV:-production}
@@ -93,7 +94,8 @@ services:
     depends_on:
       - postgres
     networks:
-      - prs_ec2_network
+      prs_ec2_network:
+        ipv4_address: 172.22.0.20
     healthcheck:
       test: ["CMD-SHELL", "node -e \"const http = require('http'); const req = http.request({hostname: 'localhost', port: 4000, path: '/', method: 'GET', timeout: 2000}, (res) => process.exit(res.statusCode < 500 ? 0 : 1)); req.on('error', () => process.exit(1)); req.end();\""]
       interval: 30s
@@ -112,8 +114,8 @@ services:
     container_name: prs-ec2-frontend
     restart: unless-stopped
     build:
-      context: ../../prs-frontend
-      dockerfile: Dockerfile
+      context: ../../prs-frontend-a
+      dockerfile: Dockerfile.prod
       args:
         - VITE_APP_API_URL=https://${DOMAIN}/api
         - VITE_APP_UPLOAD_URL=https://${DOMAIN}/api/upload
@@ -126,7 +128,8 @@ services:
       - VITE_APP_ENVIRONMENT=${VITE_APP_ENVIRONMENT:-production}
       - VITE_APP_ENABLE_DEVTOOLS=${VITE_APP_ENABLE_DEVTOOLS:-false}
     networks:
-      - prs_ec2_network
+      prs_ec2_network:
+        ipv4_address: 172.22.0.15
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:80/ || exit 1"]
       interval: 30s
@@ -166,7 +169,8 @@ services:
     volumes:
       - database_data:/var/lib/postgresql/data
     networks:
-      - prs_ec2_network
+      prs_ec2_network:
+        ipv4_address: 172.22.0.30
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 30s
