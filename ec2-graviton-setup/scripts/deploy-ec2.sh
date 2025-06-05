@@ -203,8 +203,138 @@ EOF
     fi
 }
 
+pull_repositories() {
+    local force_pull="${1:-false}"
+
+    log_info "Pulling latest code from repositories..."
+    if [ "$force_pull" = "true" ]; then
+        log_warning "Force pull enabled - will overwrite local changes!"
+    fi
+
+    # Configuration from environment variables (loaded from .env file)
+    local backend_repo_name="${BACKEND_REPO_NAME:-prs-backend-a}"
+    local frontend_repo_name="${FRONTEND_REPO_NAME:-prs-frontend-a}"
+    local backend_repo_url="${BACKEND_REPO_URL:-https://github.com/rcdelacruz/prs-backend-a.git}"
+    local frontend_repo_url="${FRONTEND_REPO_URL:-https://github.com/rcdelacruz/prs-frontend-a.git}"
+    local repos_base_dir="${REPOS_BASE_DIR:-/home/ubuntu/prs-prod}"
+    local git_branch="${GIT_BRANCH:-main}"
+
+    log_info "Repository configuration:"
+    log_info "  Base directory: $repos_base_dir"
+    log_info "  Backend repo: $backend_repo_name"
+    log_info "  Frontend repo: $frontend_repo_name"
+    log_info "  Git branch: $git_branch"
+    log_info "  Force pull: $force_pull"
+
+    # Ensure base directory exists
+    if [ ! -d "$repos_base_dir" ]; then
+        log_error "Repository base directory not found: $repos_base_dir"
+        log_info "Please set REPOS_BASE_DIR environment variable or create the directory"
+        exit 1
+    fi
+
+    cd "$repos_base_dir"
+
+    # Pull or clone backend repository
+    if [ -d "$backend_repo_name" ]; then
+        log_info "Updating $backend_repo_name repository..."
+        cd "$backend_repo_name"
+        if git status &> /dev/null; then
+            # Check if there are uncommitted changes
+            if ! git diff-index --quiet HEAD -- && [ "$force_pull" != "true" ]; then
+                log_warning "$backend_repo_name has uncommitted changes. Skipping pull to avoid data loss."
+                log_info "To force update, use: $0 pull-force"
+            else
+                if [ "$force_pull" = "true" ]; then
+                    log_info "Force pulling $backend_repo_name (will overwrite local changes)..."
+                    git fetch origin
+                    if git reset --hard "origin/$git_branch" 2>/dev/null; then
+                        log_success "$backend_repo_name force updated to latest ($git_branch branch)"
+                    elif git reset --hard origin/master 2>/dev/null; then
+                        log_success "$backend_repo_name force updated to latest (master branch)"
+                    else
+                        log_warning "Could not force update $backend_repo_name - using existing code"
+                    fi
+                else
+                    git fetch origin
+                    if git pull origin "$git_branch" 2>/dev/null; then
+                        log_success "$backend_repo_name updated to latest ($git_branch branch)"
+                    elif git pull origin master 2>/dev/null; then
+                        log_success "$backend_repo_name updated to latest (master branch)"
+                    else
+                        log_warning "Could not pull $backend_repo_name - using existing code"
+                    fi
+                fi
+            fi
+        else
+            log_warning "$backend_repo_name directory exists but is not a git repository"
+        fi
+        cd "$repos_base_dir"
+    else
+        log_info "Cloning $backend_repo_name repository..."
+        if git clone "$backend_repo_url" "$backend_repo_name"; then
+            log_success "$backend_repo_name cloned successfully"
+        else
+            log_error "Failed to clone $backend_repo_name repository from $backend_repo_url"
+            exit 1
+        fi
+    fi
+
+    # Pull or clone frontend repository
+    if [ -d "$frontend_repo_name" ]; then
+        log_info "Updating $frontend_repo_name repository..."
+        cd "$frontend_repo_name"
+        if git status &> /dev/null; then
+            # Check if there are uncommitted changes
+            if ! git diff-index --quiet HEAD -- && [ "$force_pull" != "true" ]; then
+                log_warning "$frontend_repo_name has uncommitted changes. Skipping pull to avoid data loss."
+                log_info "To force update, use: $0 pull-force"
+            else
+                if [ "$force_pull" = "true" ]; then
+                    log_info "Force pulling $frontend_repo_name (will overwrite local changes)..."
+                    git fetch origin
+                    if git reset --hard "origin/$git_branch" 2>/dev/null; then
+                        log_success "$frontend_repo_name force updated to latest ($git_branch branch)"
+                    elif git reset --hard origin/master 2>/dev/null; then
+                        log_success "$frontend_repo_name force updated to latest (master branch)"
+                    else
+                        log_warning "Could not force update $frontend_repo_name - using existing code"
+                    fi
+                else
+                    git fetch origin
+                    if git pull origin "$git_branch" 2>/dev/null; then
+                        log_success "$frontend_repo_name updated to latest ($git_branch branch)"
+                    elif git pull origin master 2>/dev/null; then
+                        log_success "$frontend_repo_name updated to latest (master branch)"
+                    else
+                        log_warning "Could not pull $frontend_repo_name - using existing code"
+                    fi
+                fi
+            fi
+        else
+            log_warning "$frontend_repo_name directory exists but is not a git repository"
+        fi
+        cd "$repos_base_dir"
+    else
+        log_info "Cloning $frontend_repo_name repository..."
+        if git clone "$frontend_repo_url" "$frontend_repo_name"; then
+            log_success "$frontend_repo_name cloned successfully"
+        else
+            log_error "Failed to clone $frontend_repo_name repository from $frontend_repo_url"
+            exit 1
+        fi
+    fi
+
+    log_success "Repository updates completed"
+}
+
 build_images() {
     log_info "Building Docker images for ARM64..."
+
+    # Configuration with defaults
+    local backend_repo_name="${BACKEND_REPO_NAME:-prs-backend-a}"
+    local frontend_repo_name="${FRONTEND_REPO_NAME:-prs-frontend-a}"
+    local repos_base_dir="${REPOS_BASE_DIR:-/home/ubuntu/prs-prod}"
 
     cd "$PROJECT_DIR"
 
@@ -213,19 +343,21 @@ build_images() {
     export COMPOSE_DOCKER_CLI_BUILD=1
 
     # Build backend image
-    if [ -d "../../prs-backend" ]; then
-        log_info "Building backend image for ARM64..."
-        docker build --platform linux/arm64 -t prs-backend:latest ../../prs-backend
+    local backend_path="$repos_base_dir/$backend_repo_name"
+    if [ -d "$backend_path" ]; then
+        log_info "Building backend image for ARM64 from: $backend_path"
+        docker build --platform linux/arm64 -t prs-backend:latest "$backend_path"
     else
-        log_warning "Backend directory not found. Skipping backend build."
+        log_warning "Backend directory not found: $backend_path. Skipping backend build."
     fi
 
     # Build frontend image
-    if [ -d "../../prs-frontend" ]; then
-        log_info "Building frontend image for ARM64..."
-        docker build --platform linux/arm64 -t prs-frontend:latest ../../prs-frontend
+    local frontend_path="$repos_base_dir/$frontend_repo_name"
+    if [ -d "$frontend_path" ]; then
+        log_info "Building frontend image for ARM64 from: $frontend_path"
+        docker build --platform linux/arm64 -t prs-frontend:latest "$frontend_path"
     else
-        log_warning "Frontend directory not found. Skipping frontend build."
+        log_warning "Frontend directory not found: $frontend_path. Skipping frontend build."
     fi
 
     log_success "Docker images built for ARM64"
@@ -466,12 +598,14 @@ show_help() {
     echo "Usage: $0 [COMMAND]"
     echo ""
     echo "Commands:"
-    echo "  deploy              Full deployment (build, start, init/import)"
+    echo "  deploy              Full deployment (pull, build, start, init/import)"
     echo "  start               Start services"
     echo "  stop                Stop services"
     echo "  restart             Restart services"
     echo "  status              Show service status and resource usage"
     echo "  logs [service]      Show logs"
+    echo "  pull                Pull latest code from configured repositories (safe)"
+    echo "  pull-force          Force pull code (overwrites local changes)"
     echo "  build               Build Docker images for ARM64"
     echo "  init-db             Initialize database"
     echo "  import-db <file>    Import SQL dump file"
@@ -481,6 +615,14 @@ show_help() {
     echo "  troubleshoot        Troubleshoot Cloudflare Tunnel issues"
     echo "  monitor             Monitor system resources"
     echo "  help                Show this help"
+    echo ""
+    echo "Repository Configuration (via .env file):"
+    echo "  REPOS_BASE_DIR      Base directory for repositories (default: /home/ubuntu/prs-prod)"
+    echo "  BACKEND_REPO_NAME   Backend repository directory name (default: prs-backend-a)"
+    echo "  FRONTEND_REPO_NAME  Frontend repository directory name (default: prs-frontend-a)"
+    echo "  BACKEND_REPO_URL    Backend repository URL for cloning"
+    echo "  FRONTEND_REPO_URL   Frontend repository URL for cloning"
+    echo "  GIT_BRANCH          Git branch to use (default: main)"
 }
 
 # Main script logic
@@ -501,17 +643,22 @@ case "${1:-deploy}" in
         check_ports
         optimize_system
         setup_ssl_certificates
+        pull_repositories false
         build_images
         start_services
         sleep 20
 
-        # Auto-import database if dump file exists
+        # Auto-import database if dump file exists, then run init-db
         if [ -f "dump_file_fixed_lineendings.sql" ]; then
             log_info "Found database dump file"
             import_database "dump_file_fixed_lineendings.sql"
+            # Run init-db after import to handle any schema updates
+            init_database
         elif [ -f "dump_file_20250526.sql" ]; then
             log_info "Found database dump file"
             import_database "dump_file_20250526.sql"
+            # Run init-db after import to handle any schema updates
+            init_database
         else
             init_database
         fi
@@ -541,8 +688,18 @@ case "${1:-deploy}" in
         load_environment
         show_logs "$@"
         ;;
+    "pull")
+        load_environment
+        pull_repositories false
+        ;;
+    "pull-force")
+        load_environment
+        pull_repositories true
+        ;;
     "build")
         check_prerequisites
+        load_environment
+        pull_repositories false
         build_images
         ;;
     "init-db")
