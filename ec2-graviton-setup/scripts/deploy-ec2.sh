@@ -129,11 +129,12 @@ check_ports() {
 }
 
 setup_ssl_certificates() {
-    log_info "Setting up SSL certificates for internal nginx..."
+    log_info "Setting up SSL certificates for nginx and PostgreSQL..."
 
     SSL_DIR="$PROJECT_DIR/ssl"
     mkdir -p "$SSL_DIR"
 
+    # Setup nginx SSL certificates
     if [ ! -f "$SSL_DIR/cert.pem" ] || [ ! -f "$SSL_DIR/key.pem" ]; then
         if [ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]; then
             log_info "Creating minimal self-signed certificates for internal nginx use..."
@@ -155,15 +156,41 @@ setup_ssl_certificates() {
             openssl dhparam -out "$SSL_DIR/dhparam.pem" 2048
         fi
 
-        log_success "Internal SSL certificates generated"
-
-        if [ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]; then
-            log_info "Public SSL is handled by Cloudflare Tunnel automatically"
-        else
-            log_info "Certificate valid for internal use only"
-        fi
+        log_success "Nginx SSL certificates generated"
     else
-        log_info "SSL certificates already exist"
+        log_info "Nginx SSL certificates already exist"
+    fi
+
+    # Setup PostgreSQL SSL certificates
+    if [ ! -f "$SSL_DIR/server.crt" ] || [ ! -f "$SSL_DIR/server.key" ]; then
+        log_info "Generating PostgreSQL SSL certificates..."
+
+        # Generate private key for PostgreSQL
+        openssl genrsa -out "$SSL_DIR/server.key" 2048
+        chmod 600 "$SSL_DIR/server.key"
+
+        # Generate certificate for PostgreSQL
+        openssl req -new -key "$SSL_DIR/server.key" -out "$SSL_DIR/server.csr" \
+            -subj "/C=US/ST=Cloud/L=EC2/O=PRS/OU=Database/CN=postgres"
+
+        openssl x509 -req -in "$SSL_DIR/server.csr" -signkey "$SSL_DIR/server.key" \
+            -out "$SSL_DIR/server.crt" -days 365
+
+        chmod 644 "$SSL_DIR/server.crt"
+        rm "$SSL_DIR/server.csr"
+
+        # Create root certificate (copy of server cert for this setup)
+        cp "$SSL_DIR/server.crt" "$SSL_DIR/root.crt"
+
+        log_success "PostgreSQL SSL certificates generated"
+    else
+        log_info "PostgreSQL SSL certificates already exist"
+    fi
+
+    if [ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]; then
+        log_info "Public SSL is handled by Cloudflare Tunnel automatically"
+    else
+        log_info "Certificates valid for internal use only"
     fi
 }
 
@@ -563,6 +590,69 @@ import_database() {
     fi
 }
 
+validate_ssl_config() {
+    log_info "Validating SSL configuration..."
+
+    # Check if .env file exists
+    if [ ! -f "$ENV_FILE" ]; then
+        log_error ".env file not found at $ENV_FILE"
+        log_info "Please copy .env.example to .env and configure it."
+        return 1
+    fi
+
+    # Source environment variables
+    source "$ENV_FILE"
+    log_success "Environment file loaded"
+
+    # Check SSL certificates
+    SSL_DIR="$PROJECT_DIR/ssl"
+    if [ ! -f "$SSL_DIR/server.crt" ]; then
+        log_error "PostgreSQL SSL certificate not found at $SSL_DIR/server.crt"
+        log_info "Run: $0 ssl-setup"
+        return 1
+    fi
+
+    if [ ! -f "$SSL_DIR/server.key" ]; then
+        log_error "PostgreSQL SSL private key not found at $SSL_DIR/server.key"
+        log_info "Run: $0 ssl-setup"
+        return 1
+    fi
+
+    log_success "SSL certificates found"
+
+    # Check certificate permissions
+    CERT_PERMS=$(stat -c "%a" "$SSL_DIR/server.crt" 2>/dev/null || echo "000")
+    KEY_PERMS=$(stat -c "%a" "$SSL_DIR/server.key" 2>/dev/null || echo "000")
+
+    if [ "$CERT_PERMS" != "644" ]; then
+        log_warning "Certificate permissions should be 644, found $CERT_PERMS"
+        log_info "Fix with: chmod 644 $SSL_DIR/server.crt"
+    fi
+
+    if [ "$KEY_PERMS" != "600" ]; then
+        log_warning "Private key permissions should be 600, found $KEY_PERMS"
+        log_info "Fix with: chmod 600 $SSL_DIR/server.key"
+    fi
+
+    log_success "Certificate permissions validated"
+
+    # Check SSL configuration
+    if [ "${POSTGRES_SSL_ENABLED:-true}" = "true" ]; then
+        log_success "PostgreSQL SSL is enabled"
+
+        if [ "${POSTGRES_SSL_MODE:-on}" = "on" ]; then
+            log_success "PostgreSQL server SSL mode is enabled"
+        else
+            log_warning "POSTGRES_SSL_ENABLED=true but POSTGRES_SSL_MODE=$POSTGRES_SSL_MODE"
+        fi
+    else
+        log_warning "PostgreSQL SSL is disabled (POSTGRES_SSL_ENABLED=false)"
+    fi
+
+    log_success "SSL configuration validation completed"
+    return 0
+}
+
 monitor_resources() {
     log_info "Resource monitoring (Press Ctrl+C to stop):"
 
@@ -609,7 +699,8 @@ show_help() {
     echo "  build               Build Docker images for ARM64"
     echo "  init-db             Initialize database"
     echo "  import-db <file>    Import SQL dump file"
-    echo "  ssl-setup           Setup internal SSL certificates"
+    echo "  ssl-setup           Setup SSL certificates for nginx and PostgreSQL"
+    echo "  ssl-validate        Validate SSL configuration"
     echo "  optimize            Optimize system for 4GB memory"
     echo "  validate            Validate configuration before deployment"
     echo "  troubleshoot        Troubleshoot Cloudflare Tunnel issues"
@@ -643,6 +734,14 @@ case "${1:-deploy}" in
         check_ports
         optimize_system
         setup_ssl_certificates
+
+        # Validate SSL configuration after setup
+        log_info "Validating SSL configuration..."
+        if ! validate_ssl_config; then
+            log_error "SSL validation failed. Please check configuration."
+            exit 1
+        fi
+
         pull_repositories false
         build_images
         start_services
@@ -713,6 +812,10 @@ case "${1:-deploy}" in
     "ssl-setup")
         load_environment
         setup_ssl_certificates
+        ;;
+    "ssl-validate")
+        load_environment
+        validate_ssl_config
         ;;
     "optimize")
         optimize_system

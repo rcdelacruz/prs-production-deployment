@@ -52,7 +52,12 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_PORT=5432
       - DIALECT=${DIALECT:-postgres}
-      - DISABLE_SSL=true
+      - DISABLE_SSL=${DISABLE_SSL:-false}
+
+      # SSL Configuration (Production SSL Enabled)
+      - POSTGRES_SSL_ENABLED=${POSTGRES_SSL_ENABLED:-true}
+      - POSTGRES_SSL_REQUIRE=${POSTGRES_SSL_REQUIRE:-false}
+      - POSTGRES_SSL_REJECT_UNAUTHORIZED=${POSTGRES_SSL_REJECT_UNAUTHORIZED:-false}
 
       # Database Pool Configuration (Optimized for 4GB)
       - POOL_MIN=${POOL_MIN:-1}
@@ -92,7 +97,8 @@ services:
       - uploads_data:/app/uploads
       - logs_data:/app/logs
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     networks:
       prs_ec2_network:
         ipv4_address: 172.22.0.20
@@ -163,11 +169,15 @@ services:
       -c wal_buffers=8MB
       -c random_page_cost=1.1
       -c effective_io_concurrency=200
-      -c ssl=off
-      -c log_statement=mod
-      -c log_min_duration_statement=1000
+      -c ssl=${POSTGRES_SSL_MODE:-on}
+      -c ssl_cert_file=${POSTGRES_SSL_CERT_FILE:-/etc/ssl/certs/server.crt}
+      -c ssl_key_file=${POSTGRES_SSL_KEY_FILE:-/etc/ssl/private/server.key}
+      -c log_statement=${POSTGRES_LOG_STATEMENT:-mod}
+      -c log_min_duration_statement=${POSTGRES_LOG_MIN_DURATION:-1000}
     volumes:
       - database_data:/var/lib/postgresql/data
+      - ./ssl:/etc/ssl/certs:ro
+      - ./ssl:/etc/ssl/private:ro
     networks:
       prs_ec2_network:
         ipv4_address: 172.22.0.30
@@ -195,7 +205,8 @@ services:
       - ADMINER_DEFAULT_SERVER=postgres
       - ADMINER_DESIGN=hydra
     networks:
-      - prs_ec2_network
+      prs_ec2_network:
+        ipv4_address: 172.22.0.10
     depends_on:
       - postgres
     deploy:
@@ -257,7 +268,8 @@ services:
       - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - ./config/grafana/grafana.ini:/etc/grafana/grafana.ini:ro
     networks:
-      - prs_ec2_network
+      prs_ec2_network:
+        ipv4_address: 172.22.0.25
     depends_on:
       - prometheus
     healthcheck:
