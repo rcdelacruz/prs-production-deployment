@@ -135,18 +135,18 @@ validate_docker_compose() {
     done
 
     # Check if backend source exists for database scripts
-    if [ ! -d "../../prs-backend" ]; then
+    if [ ! -d "../../prs-backend-a" ]; then
         log_warning "Backend source directory not found. Database initialization may fail."
-        log_info "Expected path: ../../prs-backend"
+        log_info "Expected path: ../../prs-backend-a"
         ((VALIDATION_WARNINGS++))
     else
         # Check if package.json has required scripts
-        if [ -f "../../prs-backend/package.json" ]; then
-            if ! grep -q '"migrate:dev"' "../../prs-backend/package.json"; then
+        if [ -f "../../prs-backend-a/package.json" ]; then
+            if ! grep -q '"migrate:dev"' "../../prs-backend-a/package.json"; then
                 log_error "Backend package.json missing migrate:dev script"
                 ((VALIDATION_ERRORS++))
             fi
-            if ! grep -q '"seed:dev"' "../../prs-backend/package.json"; then
+            if ! grep -q '"seed:dev"' "../../prs-backend-a/package.json"; then
                 log_error "Backend package.json missing seed:dev script"
                 ((VALIDATION_ERRORS++))
             fi

@@ -129,11 +129,12 @@ check_ports() {
 }
 
 setup_ssl_certificates() {
-    log_info "Setting up SSL certificates for internal nginx..."
+    log_info "Setting up SSL certificates for nginx and PostgreSQL..."
 
     SSL_DIR="$PROJECT_DIR/ssl"
     mkdir -p "$SSL_DIR"
 
+    # Setup nginx SSL certificates
     if [ ! -f "$SSL_DIR/cert.pem" ] || [ ! -f "$SSL_DIR/key.pem" ]; then
         if [ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]; then
             log_info "Creating minimal self-signed certificates for internal nginx use..."
@@ -155,15 +156,41 @@ setup_ssl_certificates() {
             openssl dhparam -out "$SSL_DIR/dhparam.pem" 2048
         fi
 
-        log_success "Internal SSL certificates generated"
-
-        if [ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]; then
-            log_info "Public SSL is handled by Cloudflare Tunnel automatically"
-        else
-            log_info "Certificate valid for internal use only"
-        fi
+        log_success "Nginx SSL certificates generated"
     else
-        log_info "SSL certificates already exist"
+        log_info "Nginx SSL certificates already exist"
+    fi
+
+    # Setup PostgreSQL SSL certificates
+    if [ ! -f "$SSL_DIR/server.crt" ] || [ ! -f "$SSL_DIR/server.key" ]; then
+        log_info "Generating PostgreSQL SSL certificates..."
+
+        # Generate private key for PostgreSQL
+        openssl genrsa -out "$SSL_DIR/server.key" 2048
+        chmod 600 "$SSL_DIR/server.key"
+
+        # Generate certificate for PostgreSQL
+        openssl req -new -key "$SSL_DIR/server.key" -out "$SSL_DIR/server.csr" \
+            -subj "/C=US/ST=Cloud/L=EC2/O=PRS/OU=Database/CN=postgres"
+
+        openssl x509 -req -in "$SSL_DIR/server.csr" -signkey "$SSL_DIR/server.key" \
+            -out "$SSL_DIR/server.crt" -days 365
+
+        chmod 644 "$SSL_DIR/server.crt"
+        rm "$SSL_DIR/server.csr"
+
+        # Create root certificate (copy of server cert for this setup)
+        cp "$SSL_DIR/server.crt" "$SSL_DIR/root.crt"
+
+        log_success "PostgreSQL SSL certificates generated"
+    else
+        log_info "PostgreSQL SSL certificates already exist"
+    fi
+
+    if [ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]; then
+        log_info "Public SSL is handled by Cloudflare Tunnel automatically"
+    else
+        log_info "Certificates valid for internal use only"
     fi
 }
 
@@ -565,19 +592,6 @@ import_database() {
     fi
 }
 
-# Safe database import with foreign key constraint handling
-import_database_safe() {
-    local sql_file="$1"
-
-    if [ ! -f "./scripts/import-database-safe.sh" ]; then
-        log_error "Safe import script not found: ./scripts/import-database-safe.sh"
-        exit 1
-    fi
-
-    log_info "Using safe database import with foreign key constraint handling..."
-    ./scripts/import-database-safe.sh "$sql_file"
-}
-
 monitor_resources() {
     log_info "Resource monitoring (Press Ctrl+C to stop):"
 
@@ -623,9 +637,7 @@ show_help() {
     echo "  pull-force          Force pull code (overwrites local changes)"
     echo "  build               Build Docker images for ARM64"
     echo "  init-db             Initialize database"
-    echo "  import-db <file>    Import SQL dump file (basic)"
-    echo "  import-db-safe <file> Import SQL dump with foreign key handling (recommended)"
-    echo "  create-dump [type] [name] Create database dump (full|schema|both)"
+    echo "  import-db <file>    Import SQL dump file"
     echo "  ssl-setup           Setup internal SSL certificates"
     echo "  optimize            Optimize system for 4GB memory"
     echo "  validate            Validate configuration before deployment"
@@ -660,6 +672,14 @@ case "${1:-deploy}" in
         check_ports
         optimize_system
         setup_ssl_certificates
+
+        # Validate SSL configuration after setup
+        log_info "Validating SSL configuration..."
+        if ! validate_ssl_config; then
+            log_error "SSL validation failed. Please check configuration."
+            exit 1
+        fi
+
         pull_repositories false
         build_images
         start_services
@@ -764,6 +784,10 @@ case "${1:-deploy}" in
     "ssl-setup")
         load_environment
         setup_ssl_certificates
+        ;;
+    "ssl-validate")
+        load_environment
+        validate_ssl_config
         ;;
     "optimize")
         optimize_system
