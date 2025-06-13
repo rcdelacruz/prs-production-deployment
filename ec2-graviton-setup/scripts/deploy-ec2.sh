@@ -532,6 +532,7 @@ import_database() {
     if [ -z "$sql_file" ]; then
         log_error "Please provide a SQL file path"
         log_info "Usage: $0 import-db <path-to-sql-file>"
+        log_info "For safer import with foreign key handling, use: $0 import-db-safe <path-to-sql-file>"
         exit 1
     fi
 
@@ -541,6 +542,7 @@ import_database() {
     fi
 
     log_info "Importing database from: $sql_file"
+    log_warning "Using basic import. For safer import with foreign key handling, use 'import-db-safe' command."
 
     # Wait for database to be ready
     log_info "Waiting for database to be ready..."
@@ -561,6 +563,19 @@ import_database() {
         log_error "Database import failed"
         exit 1
     fi
+}
+
+# Safe database import with foreign key constraint handling
+import_database_safe() {
+    local sql_file="$1"
+
+    if [ ! -f "./scripts/import-database-safe.sh" ]; then
+        log_error "Safe import script not found: ./scripts/import-database-safe.sh"
+        exit 1
+    fi
+
+    log_info "Using safe database import with foreign key constraint handling..."
+    ./scripts/import-database-safe.sh "$sql_file"
 }
 
 monitor_resources() {
@@ -608,7 +623,9 @@ show_help() {
     echo "  pull-force          Force pull code (overwrites local changes)"
     echo "  build               Build Docker images for ARM64"
     echo "  init-db             Initialize database"
-    echo "  import-db <file>    Import SQL dump file"
+    echo "  import-db <file>    Import SQL dump file (basic)"
+    echo "  import-db-safe <file> Import SQL dump with foreign key handling (recommended)"
+    echo "  create-dump [type] [name] Create database dump (full|schema|both)"
     echo "  ssl-setup           Setup internal SSL certificates"
     echo "  optimize            Optimize system for 4GB memory"
     echo "  validate            Validate configuration before deployment"
@@ -649,14 +666,35 @@ case "${1:-deploy}" in
         sleep 20
 
         # Auto-import database if dump file exists, then run init-db
+        # Use safe import method to handle foreign key constraints properly
         if [ -f "dump_file_fixed_lineendings.sql" ]; then
-            log_info "Found database dump file"
-            import_database "dump_file_fixed_lineendings.sql"
+            log_info "Found database dump file - using safe import method"
+            if [ -f "./scripts/import-database-safe.sh" ]; then
+                import_database_safe "dump_file_fixed_lineendings.sql"
+            else
+                log_warning "Safe import script not found, using basic import"
+                import_database "dump_file_fixed_lineendings.sql"
+            fi
             # Run init-db after import to handle any schema updates
             init_database
         elif [ -f "dump_file_20250526.sql" ]; then
-            log_info "Found database dump file"
-            import_database "dump_file_20250526.sql"
+            log_info "Found database dump file - using safe import method"
+            if [ -f "./scripts/import-database-safe.sh" ]; then
+                import_database_safe "dump_file_20250526.sql"
+            else
+                log_warning "Safe import script not found, using basic import"
+                import_database "dump_file_20250526.sql"
+            fi
+            # Run init-db after import to handle any schema updates
+            init_database
+        elif [ -f "dump.sql" ]; then
+            log_info "Found database dump file - using safe import method"
+            if [ -f "./scripts/import-database-safe.sh" ]; then
+                import_database_safe "dump.sql"
+            else
+                log_warning "Safe import script not found, using basic import"
+                import_database "dump.sql"
+            fi
             # Run init-db after import to handle any schema updates
             init_database
         else
@@ -709,6 +747,19 @@ case "${1:-deploy}" in
     "import-db")
         load_environment
         import_database "$2"
+        ;;
+    "import-db-safe")
+        load_environment
+        import_database_safe "$2"
+        ;;
+    "create-dump")
+        load_environment
+        if [ -f "./scripts/create-database-dump.sh" ]; then
+            ./scripts/create-database-dump.sh "$2" "$3"
+        else
+            log_error "Database dump script not found: ./scripts/create-database-dump.sh"
+            exit 1
+        fi
         ;;
     "ssl-setup")
         load_environment

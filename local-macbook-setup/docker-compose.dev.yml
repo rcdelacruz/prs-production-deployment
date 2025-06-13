@@ -1,0 +1,50 @@
+services:
+  # Backend API (Development with Hot Reload)
+  backend:
+    build:
+      context: ../../prs-backend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - uploads_data:/app/uploads
+      - logs_data:/app/logs
+      # Mount source code for hot reload
+      - ../../prs-backend/src:/app/src
+      - ../../prs-backend/package.json:/app/package.json
+      - ../../prs-backend/package-lock.json:/app/package-lock.json
+      # Mount other important files that might change
+      - ../../prs-backend/index.js:/app/index.js
+      - ../../prs-backend/.sequelizerc:/app/.sequelizerc
+    environment:
+      - NODE_ENV=development
+      - CHOKIDAR_USEPOLLING=true  # Enable polling for file watching in Docker
+
+  # Frontend Application (Development with Hot Reload)
+  frontend:
+    build:
+      context: ../../prs-frontend
+      dockerfile: Dockerfile.dev
+      args:
+        - VITE_APP_API_URL=https://${DOMAIN}:${HTTPS_PORT}/api
+        - VITE_APP_UPLOAD_URL=https://${DOMAIN}:${HTTPS_PORT}/api/upload
+        - VITE_APP_ENVIRONMENT=development
+        - VITE_APP_ENABLE_DEVTOOLS=true
+    volumes:
+      # Mount source code for hot reload
+      - ../../prs-frontend/src:/app/src
+      - ../../prs-frontend/public:/app/public
+      - ../../prs-frontend/package.json:/app/package.json
+      - ../../prs-frontend/package-lock.json:/app/package-lock.json
+      - ../../prs-frontend/vite.config.js:/app/vite.config.js
+      - ../../prs-frontend/index.html:/app/index.html
+      - ../../prs-frontend/jsconfig.json:/app/jsconfig.json
+      - ../../prs-frontend/tailwind.config.js:/app/tailwind.config.js
+      - ../../prs-frontend/postcss.config.js:/app/postcss.config.js
+      # Exclude node_modules to avoid conflicts
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+      - CHOKIDAR_USEPOLLING=true  # Enable polling for file watching in Docker
+      - VITE_APP_API_URL=https://${DOMAIN}:${HTTPS_PORT}/api
+      - VITE_APP_UPLOAD_URL=https://${DOMAIN}:${HTTPS_PORT}/api/upload
+      - VITE_APP_ENVIRONMENT=development
+      - VITE_APP_ENABLE_DEVTOOLS=true

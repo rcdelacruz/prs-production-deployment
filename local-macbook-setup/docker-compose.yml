@@ -33,7 +33,8 @@ services:
       context: ../../prs-backend
       dockerfile: Dockerfile
     environment:
-      - NODE_ENV=${NODE_ENV:-development}
+      - NODE_ENV=local
+      - DOCKER_ENV=true
       - PORT=4000
       - HOST=0.0.0.0
       - LOG_LEVEL=${LOG_LEVEL:-debug}
@@ -81,11 +82,14 @@ services:
 
       # Development settings
       - ENABLE_DEBUG_LOGS=${ENABLE_DEBUG_LOGS:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-debug}
+      - DEBUG=*
+      - FASTIFY_LOG_LEVEL=debug
     volumes:
       - uploads_data:/app/uploads
       - logs_data:/app/logs
       # Uncomment for development hot reload
-      # - ../../prs-backend/src:/app/src:ro
+      - ../../prs-backend/src:/app/src:ro
     depends_on:
       - postgres
     networks:
@@ -101,7 +105,7 @@ services:
         limits:
           memory: ${BACKEND_MEMORY_LIMIT:-512m}
 
-  # Frontend Application (Local Development)
+  # Frontend Application (Local Development - Stable)
   frontend:
     image: prs-frontend:${VERSION:-latest}
     container_name: prs-local-frontend
@@ -109,6 +113,11 @@ services:
     build:
       context: ../../prs-frontend
       dockerfile: Dockerfile
+      args:
+        - VITE_APP_API_URL=https://${DOMAIN}:${HTTPS_PORT}/api
+        - VITE_APP_UPLOAD_URL=https://${DOMAIN}:${HTTPS_PORT}/api/upload
+        - VITE_APP_ENVIRONMENT=${VITE_APP_ENVIRONMENT:-development}
+        - VITE_APP_ENABLE_DEVTOOLS=${VITE_APP_ENABLE_DEVTOOLS:-true}
     environment:
       - NODE_ENV=${NODE_ENV:-development}
       - VITE_APP_API_URL=https://${DOMAIN}:${HTTPS_PORT}/api
