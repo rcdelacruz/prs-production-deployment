@@ -628,18 +628,18 @@ case "${1:-deploy}" in
         generate_ssl_certificates
         build_images
         start_services
-        sleep 15
+      #   sleep 15
 
-        # Check if dump file exists and import it before init
-       if [ -f "dump.sql" ]; then
-            log_info "Found dump.sql"
-            log_info "Importing database dump before initialization..."
-            import_database "dump.sql"
-            log_info "Database dump imported successfully"
-        else
-            log_info "No dump file found, running standard database initialization..."
-            init_database
-        fi
+      #   # Check if dump file exists and import it before init
+      #  if [ -f "dump.sql" ]; then
+      #       log_info "Found dump.sql"
+      #       log_info "Importing database dump before initialization..."
+      #       import_database "dump.sql"
+      #       log_info "Database dump imported successfully"
+      #   else
+      #       log_info "No dump file found, running standard database initialization..."
+      #       init_database
+      #   fi
 
         show_status
         ;;
@@ -670,18 +670,18 @@ case "${1:-deploy}" in
 
             # Wait longer for database to be fully ready
             log_info "Waiting for database to be fully ready..."
-            sleep 30
+            # sleep 30
 
-            # Import database if dump file exists
-            if [ -f "dump.sql" ]; then
-                log_info "Found dump.sql"
-                log_info "Importing database dump..."
-                import_database "dump.sql"
-                log_info "Database dump imported successfully"
-            else
-                log_info "No dump file found, running standard database initialization..."
-                init_database
-            fi
+            # # Import database if dump file exists
+            # if [ -f "dump.sql" ]; then
+            #     log_info "Found dump.sql"
+            #     log_info "Importing database dump..."
+            #     import_database "dump.sql"
+            #     log_info "Database dump imported successfully"
+            # else
+            #     log_info "No dump file found, running standard database initialization..."
+            #     init_database
+            # fi
 
             show_status
             log_success "Redeploy completed successfully!"
