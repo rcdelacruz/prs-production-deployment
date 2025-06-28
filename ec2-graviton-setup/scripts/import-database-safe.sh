@@ -33,7 +33,7 @@ log_error() {
 CONTAINER_NAME="prs-ec2-postgres"
 POSTGRES_USER="${POSTGRES_USER:-prs_user}"
 POSTGRES_DB="${POSTGRES_DB:-prs_production}"
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-prodpassword123}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-p*Ecp5YP2cvctg}"
 
 # Function to check if PostgreSQL container is running
 check_postgres_container() {

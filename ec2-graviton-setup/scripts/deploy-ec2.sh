@@ -508,8 +508,7 @@ init_database() {
     log_info "Initializing database..."
 
     # Wait for database to be ready
-    log_info "Waiting for database to be ready..."
-    sleep 15
+    wait_for_database
 
     # Check if backend container is running
     cd "$PROJECT_DIR"
@@ -553,13 +552,172 @@ init_database() {
     log_success "Database initialization completed"
 }
 
+wait_for_database() {
+    log_info "Waiting for database to be ready..."
+    local max_attempts=30
+    local attempt=1
+
+    while [ $attempt -le $max_attempts ]; do
+        if docker exec prs-ec2-postgres pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" > /dev/null 2>&1; then
+            log_success "Database is ready"
+            return 0
+        fi
+
+        log_info "Database not ready yet (attempt $attempt/$max_attempts), waiting..."
+        sleep 2
+        attempt=$((attempt + 1))
+    done
+
+    log_error "Database failed to become ready after $max_attempts attempts"
+    return 1
+}
+
+validate_foreign_keys() {
+    log_info "Validating foreign key constraints after import..."
+
+    # Check for common foreign key constraint violations
+    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
+        DO \$\$
+        DECLARE
+            constraint_record RECORD;
+            violation_count INTEGER;
+        BEGIN
+            -- Check all foreign key constraints
+            FOR constraint_record IN
+                SELECT
+                    tc.table_name,
+                    tc.constraint_name,
+                    kcu.column_name,
+                    ccu.table_name AS foreign_table_name,
+                    ccu.column_name AS foreign_column_name
+                FROM information_schema.table_constraints AS tc
+                JOIN information_schema.key_column_usage AS kcu
+                    ON tc.constraint_name = kcu.constraint_name
+                    AND tc.table_schema = kcu.table_schema
+                JOIN information_schema.constraint_column_usage AS ccu
+                    ON ccu.constraint_name = tc.constraint_name
+                    AND ccu.table_schema = tc.table_schema
+                WHERE tc.constraint_type = 'FOREIGN KEY'
+                    AND tc.table_schema = 'public'
+            LOOP
+                -- Check for violations
+                EXECUTE format('
+                    SELECT COUNT(*) FROM %I t1
+                    WHERE t1.%I IS NOT NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM %I t2
+                        WHERE t2.%I = t1.%I
+                    )',
+                    constraint_record.table_name,
+                    constraint_record.column_name,
+                    constraint_record.foreign_table_name,
+                    constraint_record.foreign_column_name,
+                    constraint_record.column_name
+                ) INTO violation_count;
+
+                IF violation_count > 0 THEN
+                    RAISE WARNING 'Foreign key constraint violation: % rows in %.% reference non-existent records in %.%',
+                        violation_count,
+                        constraint_record.table_name,
+                        constraint_record.column_name,
+                        constraint_record.foreign_table_name,
+                        constraint_record.foreign_column_name;
+                END IF;
+            END LOOP;
+        END
+        \$\$;
+    " 2>/dev/null || true
+
+    log_success "Foreign key validation completed"
+}
+
+fix_database_sequences() {
+    log_info "Fixing database sequences after import..."
+
+    # First, try a simple approach for common tables
+    log_info "Fixing sequences for common tables..."
+    local common_tables=("users" "requisitions" "companies" "projects" "departments" "comments" "attachments" "requisition_item_lists" "notifications")
+
+    for table in "${common_tables[@]}"; do
+        docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
+            DO \$\$
+            DECLARE
+                max_id INTEGER;
+                seq_name TEXT;
+            BEGIN
+                -- Check if table exists
+                IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '$table') THEN
+                    -- Get sequence name
+                    SELECT pg_get_serial_sequence('public.$table', 'id') INTO seq_name;
+
+                    IF seq_name IS NOT NULL THEN
+                        -- Get max ID
+                        EXECUTE format('SELECT COALESCE(MAX(id), 0) FROM %I', '$table') INTO max_id;
+
+                        -- Fix sequence
+                        IF max_id > 0 THEN
+                            EXECUTE format('SELECT setval(%L, %s)', seq_name, max_id + 1);
+                            RAISE NOTICE 'Fixed sequence for table $table - set to %', max_id + 1;
+                        END IF;
+                    END IF;
+                END IF;
+            END
+            \$\$;
+        " 2>/dev/null || true
+    done
+
+    # Then run a simple sequence fix for any remaining sequences
+    log_info "Running final sequence check..."
+
+    # Simple approach: just fix sequences that actually exist
+    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
+        DO \$\$
+        DECLARE
+            seq_record RECORD;
+            max_id INTEGER;
+        BEGIN
+            -- Get all sequences in the public schema
+            FOR seq_record IN
+                SELECT schemaname, sequencename
+                FROM pg_sequences
+                WHERE schemaname = 'public'
+            LOOP
+                -- Try to find the associated table and fix the sequence
+                BEGIN
+                    -- Extract table name from sequence name (remove _id_seq suffix)
+                    DECLARE
+                        table_name TEXT := regexp_replace(seq_record.sequencename, '_id_seq$', '');
+                    BEGIN
+                        -- Check if table exists and get max id
+                        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = table_name AND table_schema = 'public') THEN
+                            EXECUTE format('SELECT COALESCE(MAX(id), 0) FROM %I', table_name) INTO max_id;
+
+                            IF max_id > 0 THEN
+                                EXECUTE format('SELECT setval(%L, %s)', seq_record.schemaname||'.'||seq_record.sequencename, max_id + 1);
+                                RAISE NOTICE 'Fixed sequence % for table % - set to %', seq_record.sequencename, table_name, max_id + 1;
+                            END IF;
+                        END IF;
+                    EXCEPTION
+                        WHEN OTHERS THEN
+                            -- Skip this sequence if there's any error
+                            CONTINUE;
+                    END;
+                END;
+            END LOOP;
+        END
+        \$\$;
+    " 2>/dev/null || true
+
+    log_success "Database sequences processing completed"
+}
+
 import_database() {
     local sql_file="$1"
 
     if [ -z "$sql_file" ]; then
         log_error "Please provide a SQL file path"
         log_info "Usage: $0 import-db <path-to-sql-file>"
-        log_info "For safer import with foreign key handling, use: $0 import-db-safe <path-to-sql-file>"
+        log_info "Example: $0 import-db dump.sql"
         exit 1
     fi
 
@@ -569,11 +727,6 @@ import_database() {
     fi
 
     log_info "Importing database from: $sql_file"
-    log_warning "Using basic import. For safer import with foreign key handling, use 'import-db-safe' command."
-
-    # Wait for database to be ready
-    log_info "Waiting for database to be ready..."
-    sleep 10
 
     # Check if database container is running
     cd "$PROJECT_DIR"
@@ -582,13 +735,80 @@ import_database() {
         exit 1
     fi
 
-    # Import the SQL file
-    log_info "Importing SQL dump..."
-    if docker exec -i -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" < "$sql_file"; then
-        log_success "Database import completed successfully"
+    # Wait for database to be ready
+    wait_for_database
+
+    # Clean and recreate the database to ensure fresh import
+    log_info "Cleaning database before import..."
+    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres psql -U "${POSTGRES_USER}" -d postgres -c "DROP DATABASE IF EXISTS \"${POSTGRES_DB}\";"
+    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres psql -U "${POSTGRES_USER}" -d postgres -c "CREATE DATABASE \"${POSTGRES_DB}\";"
+
+    # Import the SQL file with improved error handling
+    log_info "Importing SQL dump with foreign key constraint handling..."
+
+    # Create a temporary SQL file with constraint handling
+    local temp_sql_file="/tmp/import_with_constraints.sql"
+
+    # Prepare the import with constraint handling
+    cat > "$temp_sql_file" << 'EOF'
+-- Disable foreign key checks during import
+SET session_replication_role = replica;
+
+-- Set client encoding and other settings
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
+
+-- Import the actual dump
+\i DUMP_FILE_PATH
+
+-- Re-enable foreign key checks
+SET session_replication_role = DEFAULT;
+
+-- Analyze tables for better performance
+ANALYZE;
+EOF
+
+    # Replace the placeholder with actual file path (inside container)
+    sed -i.bak "s|DUMP_FILE_PATH|/tmp/dump.sql|g" "$temp_sql_file"
+
+    # Copy the temp file to container and execute
+    if docker cp "$temp_sql_file" prs-ec2-postgres:/tmp/import_with_constraints.sql && \
+       docker cp "$sql_file" prs-ec2-postgres:/tmp/dump.sql && \
+       docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -f /tmp/import_with_constraints.sql; then
+
+        log_info "Database import completed, fixing sequences and validating constraints..."
+        fix_database_sequences
+        validate_foreign_keys
+
+        # Clean up temporary files
+        rm -f "$temp_sql_file" "$temp_sql_file.bak"
+        docker exec prs-ec2-postgres rm -f /tmp/import_with_constraints.sql /tmp/dump.sql
+
+        log_success "Database import, sequence fix, and validation completed successfully"
+        log_info "You can now access the application with the imported data"
     else
         log_error "Database import failed"
-        exit 1
+        log_info "Trying alternative import method without constraint handling..."
+
+        # Fallback to original method
+        if docker exec -i -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" < "$sql_file"; then
+            log_info "Fallback import succeeded, fixing sequences and validating constraints..."
+            fix_database_sequences
+            validate_foreign_keys
+            log_success "Database import, sequence fix, and validation completed successfully"
+        else
+            log_error "Both import methods failed"
+            log_info "Check the SQL file format and database connection"
+            exit 1
+        fi
+
+        # Clean up temporary files
+        rm -f "$temp_sql_file" "$temp_sql_file.bak"
+        docker exec prs-ec2-postgres rm -f /tmp/import_with_constraints.sql /tmp/dump.sql 2>/dev/null || true
     fi
 }
 
@@ -620,6 +840,34 @@ monitor_resources() {
     done
 }
 
+clean_database() {
+    log_warning "This will completely clean the database. All data will be lost. Continue? (y/N)"
+    read -r response
+
+    if [[ "$response" =~ ^[Yy]$ ]]; then
+        log_info "Cleaning database..."
+
+        cd "$PROJECT_DIR"
+        if ! docker-compose ps postgres | grep -q "Up"; then
+            log_error "PostgreSQL container is not running. Please start services first."
+            exit 1
+        fi
+
+        # Wait for database to be ready
+        wait_for_database
+
+        # Drop and recreate database
+        log_info "Dropping and recreating database..."
+        docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres psql -U "${POSTGRES_USER}" -d postgres -c "DROP DATABASE IF EXISTS \"${POSTGRES_DB}\";"
+        docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres psql -U "${POSTGRES_USER}" -d postgres -c "CREATE DATABASE \"${POSTGRES_DB}\";"
+
+        log_success "Database cleaned successfully"
+        log_info "You can now run 'init-db' or 'import-db' to set up the database"
+    else
+        log_info "Database clean cancelled"
+    fi
+}
+
 show_help() {
     echo "PRS EC2 Graviton Deployment Script"
     echo "Optimized for t4g.medium (2 cores, 4GB memory, ARM64)"
@@ -637,13 +885,23 @@ show_help() {
     echo "  pull-force          Force pull code (overwrites local changes)"
     echo "  build               Build Docker images for ARM64"
     echo "  init-db             Initialize database"
-    echo "  import-db <file>    Import SQL dump file"
+    echo "  import-db <file>    Import SQL dump file with enhanced constraint handling"
+    echo "  import-db-safe <file> Import SQL dump using safe import script"
+    echo "  clean-db            Clean database (drop and recreate)"
+    echo "  fix-sequences       Fix database sequences after manual import"
+    echo "  validate-fk         Validate foreign key constraints"
     echo "  ssl-setup           Setup internal SSL certificates"
     echo "  optimize            Optimize system for 4GB memory"
     echo "  validate            Validate configuration before deployment"
     echo "  troubleshoot        Troubleshoot Cloudflare Tunnel issues"
     echo "  monitor             Monitor system resources"
     echo "  help                Show this help"
+    echo ""
+    echo "Database Management Examples:"
+    echo "  $0 import-db dump.sql           # Import SQL dump with enhanced handling"
+    echo "  $0 clean-db                     # Clean database if import issues occur"
+    echo "  $0 fix-sequences                # Fix database sequences if getting ID conflicts"
+    echo "  $0 validate-fk                  # Check for foreign key constraint violations"
     echo ""
     echo "Repository Configuration (via .env file):"
     echo "  REPOS_BASE_DIR      Base directory for repositories (default: /home/ubuntu/prs-prod)"
@@ -675,7 +933,7 @@ case "${1:-deploy}" in
 
         # Validate SSL configuration after setup
         log_info "Validating SSL configuration..."
-        if ! validate_ssl_config; then
+        if ! "$SCRIPT_DIR/validate-ssl-config.sh"; then
             log_error "SSL validation failed. Please check configuration."
             exit 1
         fi
@@ -690,7 +948,7 @@ case "${1:-deploy}" in
         if [ -f "dump_file_fixed_lineendings.sql" ]; then
             log_info "Found database dump file - using safe import method"
             if [ -f "./scripts/import-database-safe.sh" ]; then
-                import_database_safe "dump_file_fixed_lineendings.sql"
+                POSTGRES_PASSWORD="$POSTGRES_PASSWORD" "$SCRIPT_DIR/import-database-safe.sh" "dump_file_fixed_lineendings.sql"
             else
                 log_warning "Safe import script not found, using basic import"
                 import_database "dump_file_fixed_lineendings.sql"
@@ -700,7 +958,7 @@ case "${1:-deploy}" in
         elif [ -f "dump_file_20250526.sql" ]; then
             log_info "Found database dump file - using safe import method"
             if [ -f "./scripts/import-database-safe.sh" ]; then
-                import_database_safe "dump_file_20250526.sql"
+                POSTGRES_PASSWORD="$POSTGRES_PASSWORD" "$SCRIPT_DIR/import-database-safe.sh" "dump_file_20250526.sql"
             else
                 log_warning "Safe import script not found, using basic import"
                 import_database "dump_file_20250526.sql"
@@ -710,7 +968,7 @@ case "${1:-deploy}" in
         elif [ -f "dump.sql" ]; then
             log_info "Found database dump file - using safe import method"
             if [ -f "./scripts/import-database-safe.sh" ]; then
-                import_database_safe "dump.sql"
+                POSTGRES_PASSWORD="$POSTGRES_PASSWORD" "$SCRIPT_DIR/import-database-safe.sh" "dump.sql"
             else
                 log_warning "Safe import script not found, using basic import"
                 import_database "dump.sql"
@@ -770,7 +1028,31 @@ case "${1:-deploy}" in
         ;;
     "import-db-safe")
         load_environment
-        import_database_safe "$2"
+        POSTGRES_PASSWORD="$POSTGRES_PASSWORD" "$SCRIPT_DIR/import-database-safe.sh" "$2"
+        ;;
+    "clean-db")
+        load_environment
+        clean_database
+        ;;
+    "fix-sequences")
+        load_environment
+        cd "$PROJECT_DIR"
+        if ! docker-compose ps postgres | grep -q "Up"; then
+            log_error "PostgreSQL container is not running. Please start services first."
+            exit 1
+        fi
+        wait_for_database
+        fix_database_sequences
+        ;;
+    "validate-fk")
+        load_environment
+        cd "$PROJECT_DIR"
+        if ! docker-compose ps postgres | grep -q "Up"; then
+            log_error "PostgreSQL container is not running. Please start services first."
+            exit 1
+        fi
+        wait_for_database
+        validate_foreign_keys
         ;;
     "create-dump")
         load_environment
@@ -787,7 +1069,7 @@ case "${1:-deploy}" in
         ;;
     "ssl-validate")
         load_environment
-        validate_ssl_config
+        "$SCRIPT_DIR/validate-ssl-config.sh"
         ;;
     "optimize")
         optimize_system

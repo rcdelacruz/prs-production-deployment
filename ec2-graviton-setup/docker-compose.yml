@@ -38,7 +38,7 @@ services:
     restart: unless-stopped
     build:
       context: ../../prs-backend-a
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.prod
     environment:
       - NODE_ENV=${NODE_ENV:-production}
       - PORT=4000
