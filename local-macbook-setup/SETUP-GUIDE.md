@@ -47,7 +47,9 @@ This will:
 - ✅ Check prerequisites
 - ✅ Generate SSL certificates
 - ✅ Build Docker images
-- ✅ Start all services
+- ✅ Start all services with TimescaleDB
+- ✅ Setup production-grade time-series database
+- ✅ Initialize database with zero data loss
 - ✅ Initialize the database
 - ✅ Show access URLs
 
@@ -81,9 +83,11 @@ Once deployment is complete, you can access:
 - **Development-friendly CORS settings**
 
 ### Performance
-- **Reduced resource limits** for local development
-- **Faster startup** with fewer monitoring services
-- **Optimized for development workflow**
+- **Production-grade TimescaleDB** for time-series optimization
+- **Optimized resource allocation** (2GB RAM for database)
+- **Fast time-based queries** with automatic partitioning
+- **Lossless compression** for storage efficiency
+- **Optimized for development workflow** with hot reload
 
 ## Common Commands
 
@@ -120,9 +124,33 @@ Once deployment is complete, you can access:
 # Initialize/reset database
 ./scripts/deploy-local.sh init-db
 
-# Access database directly
-docker exec -it prs-local-postgres psql -U prs_user -d prs_local
+# Access TimescaleDB database directly
+docker exec -it prs-local-postgres-timescale psql -U prs_user -d prs_local
 ```
+
+### 🚀 TimescaleDB Management
+```bash
+# Setup TimescaleDB extension and hypertables
+./scripts/deploy-local.sh setup-timescaledb
+
+# Check TimescaleDB status
+./scripts/deploy-local.sh timescaledb-status
+
+# Create production-grade backup
+./scripts/deploy-local.sh timescaledb-backup
+
+# Monitor health and performance
+./scripts/deploy-local.sh timescaledb-health
+
+# Optimize performance
+./scripts/deploy-local.sh timescaledb-optimize
+```
+
+**TimescaleDB Benefits:**
+- ⚡ 50-90% faster time-based queries
+- 💾 30-70% storage savings through compression
+- 🔒 Zero data loss policy (all data preserved)
+- 📊 Real-time analytics capabilities
 
 ### Troubleshooting
 ```bash

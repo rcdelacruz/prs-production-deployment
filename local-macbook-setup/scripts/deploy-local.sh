@@ -279,7 +279,7 @@ wait_for_database() {
     local attempt=1
 
     while [ $attempt -le $max_attempts ]; do
-        if docker exec prs-local-postgres pg_isready -U "${POSTGRES_USER:-prs_user}" -d "${POSTGRES_DB:-prs_local}" > /dev/null 2>&1; then
+        if docker exec prs-local-postgres-timescale pg_isready -U "${POSTGRES_USER:-prs_user}" -d "${POSTGRES_DB:-prs_local}" > /dev/null 2>&1; then
             log_success "Database is ready"
             return 0
         fi
@@ -297,7 +297,7 @@ validate_foreign_keys() {
     log_info "Validating foreign key constraints after import..."
 
     # Check for common foreign key constraint violations
-    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD:-localdev123}" prs-local-postgres psql -U "${POSTGRES_USER:-prs_user}" -d "${POSTGRES_DB:-prs_local}" -c "
+    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD:-localdev123}" prs-local-postgres-timescale psql -U "${POSTGRES_USER:-prs_user}" -d "${POSTGRES_DB:-prs_local}" -c "
         DO \$\$
         DECLARE
             constraint_record RECORD;
@@ -360,7 +360,7 @@ fix_database_sequences() {
     local common_tables=("users" "requisitions" "companies" "projects" "departments" "comments" "attachments" "requisition_item_lists" "notifications")
 
     for table in "${common_tables[@]}"; do
-        docker exec -e PGPASSWORD="${POSTGRES_PASSWORD:-localdev123}" prs-local-postgres psql -U "${POSTGRES_USER:-prs_user}" -d "${POSTGRES_DB:-prs_local}" -c "
+        docker exec -e PGPASSWORD="${POSTGRES_PASSWORD:-localdev123}" prs-local-postgres-timescale psql -U "${POSTGRES_USER:-prs_user}" -d "${POSTGRES_DB:-prs_local}" -c "
             DO \$\$
             DECLARE
                 max_id INTEGER;
@@ -391,7 +391,7 @@ fix_database_sequences() {
     log_info "Running final sequence check..."
 
     # Simple approach: just fix sequences that actually exist
-    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD:-localdev123}" prs-local-postgres psql -U "${POSTGRES_USER:-prs_user}" -d "${POSTGRES_DB:-prs_local}" -c "
+    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD:-localdev123}" prs-local-postgres-timescale psql -U "${POSTGRES_USER:-prs_user}" -d "${POSTGRES_DB:-prs_local}" -c "
         DO \$\$
         DECLARE
             seq_record RECORD;
@@ -438,12 +438,13 @@ init_database() {
     # Wait for database to be ready
     wait_for_database
 
-    # Run database migrations
+    # Run database migrations (includes TimescaleDB setup)
+    log_info "Running database migrations (includes TimescaleDB setup)..."
     cd "$PROJECT_DIR"
     docker-compose -f docker-compose.yml -f docker-compose.dev.yml exec backend npm run migrate:dev || true
     docker-compose -f docker-compose.yml -f docker-compose.dev.yml exec backend npm run seed:dev || true
 
-    log_success "Database initialized"
+    log_success "Database initialized with TimescaleDB support"
 }
 
 import_database() {
@@ -476,8 +477,8 @@ import_database() {
 
     # Clean and recreate the database to ensure fresh import
     log_info "Cleaning database before import..."
-    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD:-localdev123}" prs-local-postgres psql -U "${POSTGRES_USER:-prs_user}" -d postgres -c "DROP DATABASE IF EXISTS \"${POSTGRES_DB:-prs_local}\";"
-    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD:-localdev123}" prs-local-postgres psql -U "${POSTGRES_USER:-prs_user}" -d postgres -c "CREATE DATABASE \"${POSTGRES_DB:-prs_local}\";"
+    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD:-localdev123}" prs-local-postgres-timescale psql -U "${POSTGRES_USER:-prs_user}" -d postgres -c "DROP DATABASE IF EXISTS \"${POSTGRES_DB:-prs_local}\";"
+    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD:-localdev123}" prs-local-postgres-timescale psql -U "${POSTGRES_USER:-prs_user}" -d postgres -c "CREATE DATABASE \"${POSTGRES_DB:-prs_local}\";"
 
     # Import the SQL file with improved error handling
     log_info "Importing SQL dump with foreign key constraint handling..."
@@ -512,9 +513,9 @@ EOF
     sed -i.bak "s|DUMP_FILE_PATH|/tmp/dump.sql|g" "$temp_sql_file"
 
     # Copy the temp file to container and execute
-    if docker cp "$temp_sql_file" prs-local-postgres:/tmp/import_with_constraints.sql && \
-       docker cp "$sql_file" prs-local-postgres:/tmp/dump.sql && \
-       docker exec -e PGPASSWORD="${POSTGRES_PASSWORD:-localdev123}" prs-local-postgres psql -U "${POSTGRES_USER:-prs_user}" -d "${POSTGRES_DB:-prs_local}" -f /tmp/import_with_constraints.sql; then
+    if docker cp "$temp_sql_file" prs-local-postgres-timescale:/tmp/import_with_constraints.sql && \
+       docker cp "$sql_file" prs-local-postgres-timescale:/tmp/dump.sql && \
+       docker exec -e PGPASSWORD="${POSTGRES_PASSWORD:-localdev123}" prs-local-postgres-timescale psql -U "${POSTGRES_USER:-prs_user}" -d "${POSTGRES_DB:-prs_local}" -f /tmp/import_with_constraints.sql; then
 
         log_info "Database import completed, fixing sequences and validating constraints..."
         fix_database_sequences
@@ -522,7 +523,7 @@ EOF
 
         # Clean up temporary files
         rm -f "$temp_sql_file" "$temp_sql_file.bak"
-        docker exec prs-local-postgres rm -f /tmp/import_with_constraints.sql /tmp/dump.sql
+        docker exec prs-local-postgres-timescale rm -f /tmp/import_with_constraints.sql /tmp/dump.sql
 
         log_success "Database import, sequence fix, and validation completed successfully"
         log_info "You can now access the application with the imported data"
@@ -531,7 +532,7 @@ EOF
         log_info "Trying alternative import method without constraint handling..."
 
         # Fallback to original method
-        if docker exec -i -e PGPASSWORD="${POSTGRES_PASSWORD:-localdev123}" prs-local-postgres psql -U "${POSTGRES_USER:-prs_user}" -d "${POSTGRES_DB:-prs_local}" < "$sql_file"; then
+        if docker exec -i -e PGPASSWORD="${POSTGRES_PASSWORD:-localdev123}" prs-local-postgres-timescale psql -U "${POSTGRES_USER:-prs_user}" -d "${POSTGRES_DB:-prs_local}" < "$sql_file"; then
             log_info "Fallback import succeeded, fixing sequences and validating constraints..."
             fix_database_sequences
             validate_foreign_keys
@@ -544,7 +545,7 @@ EOF
 
         # Clean up temporary files
         rm -f "$temp_sql_file" "$temp_sql_file.bak"
-        docker exec prs-local-postgres rm -f /tmp/import_with_constraints.sql /tmp/dump.sql 2>/dev/null || true
+        docker exec prs-local-postgres-timescale rm -f /tmp/import_with_constraints.sql /tmp/dump.sql 2>/dev/null || true
     fi
 }
 
@@ -567,8 +568,8 @@ clean_database() {
 
         # Drop and recreate database
         log_info "Dropping and recreating database..."
-        docker exec -e PGPASSWORD="${POSTGRES_PASSWORD:-localdev123}" prs-local-postgres psql -U "${POSTGRES_USER:-prs_user}" -d postgres -c "DROP DATABASE IF EXISTS \"${POSTGRES_DB:-prs_local}\";"
-        docker exec -e PGPASSWORD="${POSTGRES_PASSWORD:-localdev123}" prs-local-postgres psql -U "${POSTGRES_USER:-prs_user}" -d postgres -c "CREATE DATABASE \"${POSTGRES_DB:-prs_local}\";"
+        docker exec -e PGPASSWORD="${POSTGRES_PASSWORD:-localdev123}" prs-local-postgres-timescale psql -U "${POSTGRES_USER:-prs_user}" -d postgres -c "DROP DATABASE IF EXISTS \"${POSTGRES_DB:-prs_local}\";"
+        docker exec -e PGPASSWORD="${POSTGRES_PASSWORD:-localdev123}" prs-local-postgres-timescale psql -U "${POSTGRES_USER:-prs_user}" -d postgres -c "CREATE DATABASE \"${POSTGRES_DB:-prs_local}\";"
 
         log_success "Database cleaned successfully"
         log_info "You can now run 'init-db' or 'import-db' to set up the database"
@@ -606,6 +607,7 @@ show_help() {
     echo "  clean-db            Clean database (drop and recreate)"
     echo "  fix-sequences       Fix database sequences after manual import"
     echo "  validate-fk         Validate foreign key constraints"
+
     echo "  help                Show this help"
     echo ""
     echo "Examples:"
@@ -773,6 +775,7 @@ case "${1:-deploy}" in
         wait_for_database
         validate_foreign_keys
         ;;
+
     "help"|"-h"|"--help")
         show_help
         ;;

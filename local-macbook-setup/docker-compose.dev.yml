@@ -14,9 +14,25 @@ services:
       # Mount other important files that might change
       - ../../prs-backend/index.js:/app/index.js
       - ../../prs-backend/.sequelizerc:/app/.sequelizerc
+      - ../../prs-backend/scripts:/app/scripts
     environment:
       - NODE_ENV=development
       - CHOKIDAR_USEPOLLING=true  # Enable polling for file watching in Docker
+      - CHROME_PATH=/usr/bin/chromium  # Use Chromium installed in Alpine container
+
+      # Database Configuration
+      - POSTGRES_HOST=${POSTGRES_HOST:-prs-local-postgres-timescale}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - DIALECT=${DIALECT}
+
+      # Database Pool Configuration
+      - POOL_MIN=${POOL_MIN:-0}
+      - POOL_MAX=${POOL_MAX:-5}
+      - POOL_ACQUIRE=${POOL_ACQUIRE:-30000}
+      - POOL_IDLE=${POOL_IDLE:-10000}
 
   # Frontend Application (Development with Hot Reload)
   frontend:
@@ -49,3 +65,12 @@ services:
       - VITE_APP_UPLOAD_URL=https://${DOMAIN}:${HTTPS_PORT}/api/upload
       - VITE_APP_ENVIRONMENT=development
       - VITE_APP_ENABLE_DEVTOOLS=true
+
+networks:
+  default:
+    external: true
+    name: local-macbook-setup_prs_local_network
+
+volumes:
+  uploads_data:
+  logs_data:

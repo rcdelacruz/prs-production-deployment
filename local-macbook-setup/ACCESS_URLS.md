@@ -14,7 +14,7 @@ This document provides all the access URLs for your local development environmen
 ### Grafana - Monitoring Dashboard
 - **Direct Access**: http://localhost:3001
 - **Via Nginx**: https://localhost:8444/grafana
-- **Credentials**: 
+- **Credentials**:
   - Username: `admin`
   - Password: `admin123` (from .env GRAFANA_ADMIN_PASSWORD)
 
@@ -23,15 +23,16 @@ This document provides all the access URLs for your local development environmen
 - **Via Nginx**: https://localhost:8444/portainer
 - **First-time setup**: Create admin user on first visit
 
-### Adminer - Database Management
+### Adminer - Database Management (TimescaleDB)
 - **Direct Access**: http://localhost:8082
 - **Via Nginx**: https://localhost:8444/adminer
 - **Database Connection**:
-  - System: `PostgreSQL`
+  - System: `PostgreSQL` (TimescaleDB-enabled)
   - Server: `postgres` (or `localhost` if connecting externally)
   - Username: `prs_user`
   - Password: `localdev123`
   - Database: `prs_local`
+- **TimescaleDB Features**: Time-series optimization, compression, analytics
 
 ## 📊 **Monitoring Services**
 
