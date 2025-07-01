@@ -1,0 +1,26 @@
+#!/bin/bash
+
+# EC2 Graviton (ARM64) deployment script for PRS Production
+# This script provides commands to deploy and manage PRS on EC2 instances
+# with ARM64 architecture (Graviton processors).
+
+# Strict mode
+set -euo pipefail
+
+# Constants
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+ENV_FILE="$ROOT_DIR/.env"
+DEFAULT_DOCKER_SOCK="/var/run/docker.sock"
+MIN_MEMORY_MB=3500
+MIN_DISK_GB=20
+
+# ASCII Art logo
+show_logo() {
+    echo -e "\033[0;34m"
+    cat << "EOF"
+ ____  ____  ____    ____  ____  ____  ____  _  _  ____ 
+(  _ \(  _ \/ ___)  (  _ \(  _ \/ ___)(_  _)( \/ )/ ___)
+ )___/ )   /\___ \   )___/ )   /\___ \  )(   )  ( \___ \
+(__)  (__\_)(____/  (__)  (__\_)(____/ (__) (_/\_)(____/
+                                                        

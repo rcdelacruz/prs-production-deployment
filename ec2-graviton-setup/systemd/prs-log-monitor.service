@@ -1,0 +1,33 @@
+[Unit]
+Description=PRS Production Log Monitor
+After=docker.service
+Requires=docker.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=10
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/prs-prod/prs-production-deployment/ec2-graviton-setup
+ExecStart=/home/ubuntu/prs-prod/prs-production-deployment/ec2-graviton-setup/scripts/log-monitor.sh start
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=prs-log-monitor
+
+# Environment variables
+Environment=ERROR_THRESHOLD=5
+Environment=TIME_WINDOW=300
+Environment=CHECK_INTERVAL=60
+Environment=ENABLE_ALERTS=true
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/home/ubuntu/prs-prod/prs-production-deployment/ec2-graviton-setup/logs
+
+[Install]
+WantedBy=multi-user.target

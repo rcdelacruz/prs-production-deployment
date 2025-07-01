@@ -369,20 +369,30 @@ build_images() {
     export DOCKER_BUILDKIT=1
     export COMPOSE_DOCKER_CLI_BUILD=1
 
-    # Build backend image
+    # Method 1: Use docker-compose build (recommended - uses docker-compose.yml configuration)
+    log_info "Building images using docker-compose (uses Dockerfile.prod as configured)..."
+    if docker-compose build --parallel backend frontend; then
+        log_success "Docker images built successfully using docker-compose"
+        return 0
+    else
+        log_warning "docker-compose build failed, falling back to direct docker build..."
+    fi
+
+    # Method 2: Fallback to direct docker build with explicit Dockerfile.prod
+    # Build backend image using Dockerfile.prod
     local backend_path="$repos_base_dir/$backend_repo_name"
     if [ -d "$backend_path" ]; then
-        log_info "Building backend image for ARM64 from: $backend_path"
-        docker build --platform linux/arm64 -t prs-backend:latest "$backend_path"
+        log_info "Building backend image for ARM64 from: $backend_path using Dockerfile.prod"
+        docker build --platform linux/arm64 -f "$backend_path/Dockerfile.prod" -t prs-backend:latest "$backend_path"
     else
         log_warning "Backend directory not found: $backend_path. Skipping backend build."
     fi
 
-    # Build frontend image
+    # Build frontend image using Dockerfile.prod
     local frontend_path="$repos_base_dir/$frontend_repo_name"
     if [ -d "$frontend_path" ]; then
-        log_info "Building frontend image for ARM64 from: $frontend_path"
-        docker build --platform linux/arm64 -t prs-frontend:latest "$frontend_path"
+        log_info "Building frontend image for ARM64 from: $frontend_path using Dockerfile.prod"
+        docker build --platform linux/arm64 -f "$frontend_path/Dockerfile.prod" -t prs-frontend:latest "$frontend_path"
     else
         log_warning "Frontend directory not found: $frontend_path. Skipping frontend build."
     fi
@@ -533,10 +543,47 @@ init_database() {
         fi
     fi
 
+    # Check if TimescaleDB extension is available and enable it
+    log_info "Checking TimescaleDB extension availability..."
+    local extension_check=$(docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres-timescale psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -t -c "SELECT EXISTS(SELECT 1 FROM pg_available_extensions WHERE name = 'timescaledb');" 2>/dev/null | tr -d ' ')
+
+    if [ "$extension_check" = "t" ]; then
+        log_success "TimescaleDB extension is available"
+
+        # Enable TimescaleDB extension
+        log_info "Enabling TimescaleDB extension..."
+        docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres-timescale psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "CREATE EXTENSION IF NOT EXISTS timescaledb;" 2>/dev/null || {
+            log_warning "Failed to enable TimescaleDB extension, continuing with regular PostgreSQL"
+        }
+    else
+        log_info "TimescaleDB extension not available, using regular PostgreSQL"
+    fi
+
     # Run database migrations using the correct script names from package.json
-    log_info "Running database migrations..."
+    log_info "Running database migrations (including TimescaleDB migration if available)..."
     if docker-compose exec -T backend npm run "$migrate_script"; then
         log_success "Database migrations completed"
+
+        # Check if TimescaleDB hypertables were created and setup compression
+        if [ "$extension_check" = "t" ]; then
+            local hypertable_count=$(docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres-timescale psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -t -c "SELECT COUNT(*) FROM timescaledb_information.hypertables;" 2>/dev/null | tr -d ' ')
+
+            if [ "$hypertable_count" -gt 0 ]; then
+                log_success "TimescaleDB setup completed - $hypertable_count hypertables created"
+
+                # Setup compression policies for long-term data growth
+                log_info "Setting up compression policies for zero-deletion data growth..."
+                if [ -f "$SCRIPT_DIR/timescaledb-maintenance.sh" ]; then
+                    "$SCRIPT_DIR/timescaledb-maintenance.sh" setup-compression || {
+                        log_warning "Failed to setup compression policies, you can run this manually later"
+                    }
+                else
+                    log_warning "TimescaleDB maintenance script not found, compression policies not set"
+                fi
+            else
+                log_info "No hypertables found - TimescaleDB migration may not have run yet"
+            fi
+        fi
     else
         log_warning "Database migrations failed - this may be normal if already migrated"
     fi
@@ -558,7 +605,7 @@ wait_for_database() {
     local attempt=1
 
     while [ $attempt -le $max_attempts ]; do
-        if docker exec prs-ec2-postgres pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" > /dev/null 2>&1; then
+        if docker exec prs-ec2-postgres-timescale pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" > /dev/null 2>&1; then
             log_success "Database is ready"
             return 0
         fi
@@ -576,7 +623,7 @@ validate_foreign_keys() {
     log_info "Validating foreign key constraints after import..."
 
     # Check for common foreign key constraint violations
-    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
+    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres-timescale psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
         DO \$\$
         DECLARE
             constraint_record RECORD;
@@ -639,7 +686,7 @@ fix_database_sequences() {
     local common_tables=("users" "requisitions" "companies" "projects" "departments" "comments" "attachments" "requisition_item_lists" "notifications")
 
     for table in "${common_tables[@]}"; do
-        docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
+        docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres-timescale psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
             DO \$\$
             DECLARE
                 max_id INTEGER;
@@ -670,7 +717,7 @@ fix_database_sequences() {
     log_info "Running final sequence check..."
 
     # Simple approach: just fix sequences that actually exist
-    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
+    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres-timescale psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
         DO \$\$
         DECLARE
             seq_record RECORD;
@@ -740,8 +787,8 @@ import_database() {
 
     # Clean and recreate the database to ensure fresh import
     log_info "Cleaning database before import..."
-    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres psql -U "${POSTGRES_USER}" -d postgres -c "DROP DATABASE IF EXISTS \"${POSTGRES_DB}\";"
-    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres psql -U "${POSTGRES_USER}" -d postgres -c "CREATE DATABASE \"${POSTGRES_DB}\";"
+    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres-timescale psql -U "${POSTGRES_USER}" -d postgres -c "DROP DATABASE IF EXISTS \"${POSTGRES_DB}\";"
+    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres-timescale psql -U "${POSTGRES_USER}" -d postgres -c "CREATE DATABASE \"${POSTGRES_DB}\";"
 
     # Import the SQL file with improved error handling
     log_info "Importing SQL dump with foreign key constraint handling..."
@@ -776,9 +823,9 @@ EOF
     sed -i.bak "s|DUMP_FILE_PATH|/tmp/dump.sql|g" "$temp_sql_file"
 
     # Copy the temp file to container and execute
-    if docker cp "$temp_sql_file" prs-ec2-postgres:/tmp/import_with_constraints.sql && \
-       docker cp "$sql_file" prs-ec2-postgres:/tmp/dump.sql && \
-       docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -f /tmp/import_with_constraints.sql; then
+    if docker cp "$temp_sql_file" prs-ec2-postgres-timescale:/tmp/import_with_constraints.sql && \
+       docker cp "$sql_file" prs-ec2-postgres-timescale:/tmp/dump.sql && \
+       docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres-timescale psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -f /tmp/import_with_constraints.sql; then
 
         log_info "Database import completed, fixing sequences and validating constraints..."
         fix_database_sequences
@@ -786,7 +833,7 @@ EOF
 
         # Clean up temporary files
         rm -f "$temp_sql_file" "$temp_sql_file.bak"
-        docker exec prs-ec2-postgres rm -f /tmp/import_with_constraints.sql /tmp/dump.sql
+        docker exec prs-ec2-postgres-timescale rm -f /tmp/import_with_constraints.sql /tmp/dump.sql
 
         log_success "Database import, sequence fix, and validation completed successfully"
         log_info "You can now access the application with the imported data"
@@ -795,7 +842,7 @@ EOF
         log_info "Trying alternative import method without constraint handling..."
 
         # Fallback to original method
-        if docker exec -i -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" < "$sql_file"; then
+        if docker exec -i -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres-timescale psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" < "$sql_file"; then
             log_info "Fallback import succeeded, fixing sequences and validating constraints..."
             fix_database_sequences
             validate_foreign_keys
@@ -808,7 +855,7 @@ EOF
 
         # Clean up temporary files
         rm -f "$temp_sql_file" "$temp_sql_file.bak"
-        docker exec prs-ec2-postgres rm -f /tmp/import_with_constraints.sql /tmp/dump.sql 2>/dev/null || true
+        docker exec prs-ec2-postgres-timescale rm -f /tmp/import_with_constraints.sql /tmp/dump.sql 2>/dev/null || true
     fi
 }
 
@@ -858,14 +905,172 @@ clean_database() {
 
         # Drop and recreate database
         log_info "Dropping and recreating database..."
-        docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres psql -U "${POSTGRES_USER}" -d postgres -c "DROP DATABASE IF EXISTS \"${POSTGRES_DB}\";"
-        docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres psql -U "${POSTGRES_USER}" -d postgres -c "CREATE DATABASE \"${POSTGRES_DB}\";"
+        docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres-timescale psql -U "${POSTGRES_USER}" -d postgres -c "DROP DATABASE IF EXISTS \"${POSTGRES_DB}\";"
+        docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres-timescale psql -U "${POSTGRES_USER}" -d postgres -c "CREATE DATABASE \"${POSTGRES_DB}\";"
 
         log_success "Database cleaned successfully"
         log_info "You can now run 'init-db' or 'import-db' to set up the database"
     else
         log_info "Database clean cancelled"
     fi
+}
+
+# ============================================================================
+# TIMESCALEDB MANAGEMENT FUNCTIONS
+# ============================================================================
+
+
+
+timescaledb_status() {
+    log_info "Checking TimescaleDB status..."
+
+    # Wait for database to be ready
+    wait_for_database
+
+    # Check if TimescaleDB extension is enabled
+    log_info "TimescaleDB Extension Status:"
+    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres-timescale psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
+        SELECT
+            CASE
+                WHEN EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'timescaledb')
+                THEN '✅ TimescaleDB extension is ENABLED'
+                ELSE '❌ TimescaleDB extension is NOT enabled'
+            END as extension_status;
+    " 2>/dev/null || {
+        log_error "Failed to check TimescaleDB extension status"
+        return 1
+    }
+
+    # Show TimescaleDB version if available
+    log_info "TimescaleDB Version:"
+    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres-timescale psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
+        SELECT
+            CASE
+                WHEN EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'timescaledb')
+                THEN (SELECT extversion FROM pg_extension WHERE extname = 'timescaledb')
+                ELSE 'Extension not enabled'
+            END as timescaledb_version;
+    " 2>/dev/null || true
+
+    # Show hypertables if any exist
+    log_info "Hypertables Status:"
+    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres-timescale psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
+        SELECT
+            CASE
+                WHEN EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'timescaledb')
+                THEN (
+                    SELECT COALESCE(
+                        (SELECT COUNT(*)::text || ' hypertables found'
+                         FROM timescaledb_information.hypertables),
+                        'No hypertables found'
+                    )
+                )
+                ELSE 'TimescaleDB extension not enabled'
+            END as hypertables_status;
+    " 2>/dev/null || true
+
+    # Show detailed hypertable information if available
+    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres-timescale psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
+        SELECT
+            hypertable_name,
+            num_chunks,
+            pg_size_pretty(pg_total_relation_size('public.' || hypertable_name)) as table_size
+        FROM timescaledb_information.hypertables
+        ORDER BY hypertable_name;
+    " 2>/dev/null || true
+
+    log_success "TimescaleDB status check completed"
+}
+
+timescaledb_backup() {
+    log_info "Creating TimescaleDB backup..."
+
+    # Create backup directory
+    local backup_dir="$PROJECT_DIR/backups"
+    mkdir -p "$backup_dir"
+
+    # Generate backup filename with timestamp
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local backup_file="$backup_dir/timescaledb_backup_${timestamp}.dump"
+    local sql_backup_file="$backup_dir/timescaledb_backup_${timestamp}.sql"
+
+    # Wait for database to be ready
+    wait_for_database
+
+    # Create binary backup (custom format)
+    log_info "Creating binary backup (custom format)..."
+    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres-timescale pg_dump \
+        -U "${POSTGRES_USER}" \
+        -d "${POSTGRES_DB}" \
+        -Fc \
+        -f "/tmp/backup.dump" 2>/dev/null || {
+        log_error "Failed to create binary backup"
+        return 1
+    }
+
+    # Copy backup from container
+    docker cp prs-ec2-postgres-timescale:/tmp/backup.dump "$backup_file"
+    docker exec prs-ec2-postgres-timescale rm -f /tmp/backup.dump
+
+    # Create SQL backup
+    log_info "Creating SQL backup..."
+    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres-timescale pg_dump \
+        -U "${POSTGRES_USER}" \
+        -d "${POSTGRES_DB}" \
+        -f "/tmp/backup.sql" 2>/dev/null || {
+        log_error "Failed to create SQL backup"
+        return 1
+    }
+
+    # Copy SQL backup from container
+    docker cp prs-ec2-postgres-timescale:/tmp/backup.sql "$sql_backup_file"
+    docker exec prs-ec2-postgres-timescale rm -f /tmp/backup.sql
+
+    # Show backup information
+    log_success "TimescaleDB backup completed:"
+    log_info "  Binary backup: $backup_file ($(du -h "$backup_file" | cut -f1))"
+    log_info "  SQL backup: $sql_backup_file ($(du -h "$sql_backup_file" | cut -f1))"
+    log_info "  Backup directory: $backup_dir"
+}
+
+timescaledb_optimize() {
+    log_info "Running TimescaleDB optimization tasks..."
+
+    # Wait for database to be ready
+    wait_for_database
+
+    # Check if TimescaleDB is enabled
+    local extension_check=$(docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres-timescale psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -t -c "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'timescaledb');" 2>/dev/null | tr -d ' ')
+
+    if [ "$extension_check" != "t" ]; then
+        log_error "TimescaleDB extension is not enabled"
+        return 1
+    fi
+
+    # Run VACUUM and ANALYZE on hypertables
+    log_info "Running VACUUM and ANALYZE on hypertables..."
+    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres-timescale psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
+        DO \$\$
+        DECLARE
+            ht_name text;
+        BEGIN
+            FOR ht_name IN
+                SELECT hypertable_name FROM timescaledb_information.hypertables
+            LOOP
+                RAISE NOTICE 'Optimizing hypertable: %', ht_name;
+                EXECUTE 'VACUUM ANALYZE ' || quote_ident(ht_name);
+            END LOOP;
+        END \$\$;
+    " 2>/dev/null || {
+        log_error "Failed to optimize hypertables"
+        return 1
+    }
+
+    # Update table statistics
+    log_info "Updating table statistics..."
+    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" prs-ec2-postgres-timescale psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "ANALYZE;" 2>/dev/null || true
+
+    log_success "TimescaleDB optimization completed"
 }
 
 show_help() {
@@ -884,7 +1089,7 @@ show_help() {
     echo "  pull                Pull latest code from configured repositories (safe)"
     echo "  pull-force          Force pull code (overwrites local changes)"
     echo "  build               Build Docker images for ARM64"
-    echo "  init-db             Initialize database"
+    echo "  init-db             Initialize database (includes TimescaleDB setup)"
     echo "  import-db <file>    Import SQL dump file with enhanced constraint handling"
     echo "  import-db-safe <file> Import SQL dump using safe import script"
     echo "  clean-db            Clean database (drop and recreate)"
@@ -902,6 +1107,14 @@ show_help() {
     echo "  $0 clean-db                     # Clean database if import issues occur"
     echo "  $0 fix-sequences                # Fix database sequences if getting ID conflicts"
     echo "  $0 validate-fk                  # Check for foreign key constraint violations"
+    echo ""
+    echo "TimescaleDB Management:"
+    echo "  $0 init-db                      # Initialize database (includes TimescaleDB + compression)"
+    echo "  $0 timescaledb-status           # Show TimescaleDB status and hypertables"
+    echo "  $0 timescaledb-backup           # Create TimescaleDB backup (binary + SQL)"
+    echo "  $0 timescaledb-optimize         # Optimize TimescaleDB performance"
+    echo "  $0 timescaledb-compression      # Setup compression policies for long-term growth"
+    echo "  $0 timescaledb-maintenance [cmd] # Advanced maintenance (setup-compression, compress, optimize, status, storage, full-maintenance)"
     echo ""
     echo "Repository Configuration (via .env file):"
     echo "  REPOS_BASE_DIR      Base directory for repositories (default: /home/ubuntu/prs-prod)"
@@ -945,39 +1158,39 @@ case "${1:-deploy}" in
 
         # Auto-import database if dump file exists, then run init-db
         # Use safe import method to handle foreign key constraints properly
-        if [ -f "dump_file_fixed_lineendings.sql" ]; then
-            log_info "Found database dump file - using safe import method"
-            if [ -f "./scripts/import-database-safe.sh" ]; then
-                POSTGRES_PASSWORD="$POSTGRES_PASSWORD" "$SCRIPT_DIR/import-database-safe.sh" "dump_file_fixed_lineendings.sql"
-            else
-                log_warning "Safe import script not found, using basic import"
-                import_database "dump_file_fixed_lineendings.sql"
-            fi
-            # Run init-db after import to handle any schema updates
-            init_database
-        elif [ -f "dump_file_20250526.sql" ]; then
-            log_info "Found database dump file - using safe import method"
-            if [ -f "./scripts/import-database-safe.sh" ]; then
-                POSTGRES_PASSWORD="$POSTGRES_PASSWORD" "$SCRIPT_DIR/import-database-safe.sh" "dump_file_20250526.sql"
-            else
-                log_warning "Safe import script not found, using basic import"
-                import_database "dump_file_20250526.sql"
-            fi
-            # Run init-db after import to handle any schema updates
-            init_database
-        elif [ -f "dump.sql" ]; then
-            log_info "Found database dump file - using safe import method"
-            if [ -f "./scripts/import-database-safe.sh" ]; then
-                POSTGRES_PASSWORD="$POSTGRES_PASSWORD" "$SCRIPT_DIR/import-database-safe.sh" "dump.sql"
-            else
-                log_warning "Safe import script not found, using basic import"
-                import_database "dump.sql"
-            fi
-            # Run init-db after import to handle any schema updates
-            init_database
-        else
-            init_database
-        fi
+        # if [ -f "dump_file_fixed_lineendings.sql" ]; then
+        #     log_info "Found database dump file - using safe import method"
+        #     if [ -f "./scripts/import-database-safe.sh" ]; then
+        #         POSTGRES_PASSWORD="$POSTGRES_PASSWORD" "$SCRIPT_DIR/import-database-safe.sh" "dump_file_fixed_lineendings.sql"
+        #     else
+        #         log_warning "Safe import script not found, using basic import"
+        #         import_database "dump_file_fixed_lineendings.sql"
+        #     fi
+        #     # Run init-db after import to handle any schema updates
+        #     init_database
+        # elif [ -f "dump_file_20250526.sql" ]; then
+        #     log_info "Found database dump file - using safe import method"
+        #     if [ -f "./scripts/import-database-safe.sh" ]; then
+        #         POSTGRES_PASSWORD="$POSTGRES_PASSWORD" "$SCRIPT_DIR/import-database-safe.sh" "dump_file_20250526.sql"
+        #     else
+        #         log_warning "Safe import script not found, using basic import"
+        #         import_database "dump_file_20250526.sql"
+        #     fi
+        #     # Run init-db after import to handle any schema updates
+        #     init_database
+        # elif [ -f "dump.sql" ]; then
+        #     log_info "Found database dump file - using safe import method"
+        #     if [ -f "./scripts/import-database-safe.sh" ]; then
+        #         POSTGRES_PASSWORD="$POSTGRES_PASSWORD" "$SCRIPT_DIR/import-database-safe.sh" "dump.sql"
+        #     else
+        #         log_warning "Safe import script not found, using basic import"
+        #         import_database "dump.sql"
+        #     fi
+        #     # Run init-db after import to handle any schema updates
+        #     init_database
+        # else
+        #     init_database
+        # fi
 
         show_status
         ;;
@@ -1092,6 +1305,36 @@ case "${1:-deploy}" in
         ;;
     "monitor")
         monitor_resources
+        ;;
+    "timescaledb-status")
+        load_environment
+        timescaledb_status
+        ;;
+    "timescaledb-backup")
+        load_environment
+        timescaledb_backup
+        ;;
+    "timescaledb-optimize")
+        load_environment
+        timescaledb_optimize
+        ;;
+    "timescaledb-maintenance")
+        load_environment
+        if [ -f "$SCRIPT_DIR/timescaledb-maintenance.sh" ]; then
+            "$SCRIPT_DIR/timescaledb-maintenance.sh" "${2:-help}"
+        else
+            log_error "TimescaleDB maintenance script not found"
+            exit 1
+        fi
+        ;;
+    "timescaledb-compression")
+        load_environment
+        if [ -f "$SCRIPT_DIR/timescaledb-maintenance.sh" ]; then
+            "$SCRIPT_DIR/timescaledb-maintenance.sh" setup-compression
+        else
+            log_error "TimescaleDB maintenance script not found"
+            exit 1
+        fi
         ;;
     "help"|"-h"|"--help")
         show_help

@@ -30,7 +30,7 @@ log_error() {
 }
 
 # Configuration
-CONTAINER_NAME="prs-ec2-postgres"
+CONTAINER_NAME="prs-ec2-postgres-timescale"
 POSTGRES_USER="${POSTGRES_USER:-prs_user}"
 POSTGRES_DB="${POSTGRES_DB:-prs_production}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-p*Ecp5YP2cvctg}"
@@ -50,18 +50,18 @@ wait_for_postgres() {
     log_info "Waiting for PostgreSQL to be ready..."
     local max_attempts=30
     local attempt=1
-    
+
     while [ $attempt -le $max_attempts ]; do
         if docker exec "$CONTAINER_NAME" pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
             log_success "PostgreSQL is ready"
             return 0
         fi
-        
+
         log_info "Attempt $attempt/$max_attempts: PostgreSQL not ready yet, waiting..."
         sleep 2
         ((attempt++))
     done
-    
+
     log_error "PostgreSQL failed to become ready after $max_attempts attempts"
     exit 1
 }
@@ -70,7 +70,7 @@ wait_for_postgres() {
 backup_current_database() {
     local backup_file="backup_$(date +%Y%m%d_%H%M%S).sql"
     log_info "Creating backup of current database: $backup_file"
-    
+
     if docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$CONTAINER_NAME" \
         pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists > "$backup_file"; then
         log_success "Backup created: $backup_file"
@@ -85,9 +85,9 @@ backup_current_database() {
 create_safe_import_file() {
     local input_file="$1"
     local safe_file="${input_file%.sql}_safe.sql"
-    
+
     log_info "Creating safe import file: $safe_file"
-    
+
     cat > "$safe_file" << 'EOF'
 -- Safe Database Import Script
 -- Disable foreign key constraints and triggers during import
@@ -108,10 +108,10 @@ EOF
 
     # Add the original SQL content (excluding any existing transaction blocks)
     log_info "Processing original SQL file..."
-    
+
     # Remove any existing BEGIN/COMMIT statements and add the content
     sed -e '/^BEGIN;/d' -e '/^COMMIT;/d' -e '/^SET session_replication_role/d' "$input_file" >> "$safe_file"
-    
+
     cat >> "$safe_file" << 'EOF'
 
 -- Re-enable triggers and constraints
@@ -124,8 +124,8 @@ DECLARE
     constraint_violations INTEGER := 0;
 BEGIN
     -- Check for foreign key constraint violations
-    FOR r IN 
-        SELECT 
+    FOR r IN
+        SELECT
             tc.table_name,
             tc.constraint_name,
             kcu.column_name,
@@ -142,19 +142,19 @@ BEGIN
         AND tc.table_schema = 'public'
     LOOP
         EXECUTE format('
-            SELECT COUNT(*) FROM %I t1 
-            LEFT JOIN %I t2 ON t1.%I = t2.%I 
+            SELECT COUNT(*) FROM %I t1
+            LEFT JOIN %I t2 ON t1.%I = t2.%I
             WHERE t1.%I IS NOT NULL AND t2.%I IS NULL',
             r.table_name, r.foreign_table_name, r.column_name, r.foreign_column_name,
             r.column_name, r.foreign_column_name
         ) INTO constraint_violations;
-        
+
         IF constraint_violations > 0 THEN
             RAISE WARNING 'Foreign key constraint violation in table %.%: % rows violate constraint %',
                 r.table_name, r.column_name, constraint_violations, r.constraint_name;
         END IF;
     END LOOP;
-    
+
     RAISE NOTICE 'Foreign key constraint validation completed';
 END $$;
 
@@ -166,15 +166,15 @@ DECLARE
     r RECORD;
     max_val BIGINT;
 BEGIN
-    FOR r IN 
+    FOR r IN
         SELECT schemaname, tablename, attname, seq_name
         FROM (
-            SELECT 
+            SELECT
                 schemaname,
                 tablename,
                 attname,
                 pg_get_serial_sequence(schemaname||'.'||tablename, attname) as seq_name
-            FROM pg_stats 
+            FROM pg_stats
             WHERE schemaname = 'public'
         ) t
         WHERE seq_name IS NOT NULL
@@ -198,29 +198,29 @@ EOF
 import_database_safe() {
     local sql_file="$1"
     local backup_file="$2"
-    
+
     log_info "Starting safe database import from: $sql_file"
-    
+
     # Create safe import file
     local safe_file
     safe_file=$(create_safe_import_file "$sql_file")
-    
+
     # Import the safe SQL file
     log_info "Importing database with foreign key constraint handling..."
     if docker exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" "$CONTAINER_NAME" \
         psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 < "$safe_file"; then
         log_success "Database import completed successfully"
-        
+
         # Clean up the temporary safe file
         rm -f "$safe_file"
-        
+
         # Validate the import
         validate_import
-        
+
     else
         log_error "Database import failed"
         log_warning "Attempting to restore from backup: $backup_file"
-        
+
         # Restore from backup
         if docker exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" "$CONTAINER_NAME" \
             psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" < "$backup_file"; then
@@ -228,7 +228,7 @@ import_database_safe() {
         else
             log_error "Failed to restore from backup"
         fi
-        
+
         # Clean up
         rm -f "$safe_file"
         exit 1
@@ -238,41 +238,41 @@ import_database_safe() {
 # Function to validate the import
 validate_import() {
     log_info "Validating database import..."
-    
+
     # Check if key tables have data
     local tables=("users" "companies" "projects" "departments" "requisitions")
-    
+
     for table in "${tables[@]}"; do
         local count
         count=$(docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$CONTAINER_NAME" \
             psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c "SELECT COUNT(*) FROM $table;" 2>/dev/null | tr -d ' ')
-        
+
         if [[ "$count" =~ ^[0-9]+$ ]] && [ "$count" -gt 0 ]; then
             log_success "Table '$table' has $count records"
         else
             log_warning "Table '$table' appears to be empty or missing"
         fi
     done
-    
+
     # Check for foreign key constraint violations
     log_info "Checking for foreign key constraint violations..."
     docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$CONTAINER_NAME" \
         psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "
-        SELECT 
+        SELECT
             tc.table_name,
             tc.constraint_name
         FROM information_schema.table_constraints AS tc
         WHERE tc.constraint_type = 'FOREIGN KEY'
         AND tc.table_schema = 'public'
         LIMIT 5;" > /dev/null
-    
+
     log_success "Database validation completed"
 }
 
 # Main function
 main() {
     local sql_file="$1"
-    
+
     if [ -z "$sql_file" ]; then
         log_error "Please provide a SQL file path"
         echo "Usage: $0 <path-to-sql-file>"
@@ -281,28 +281,28 @@ main() {
         ls -la *.sql 2>/dev/null || echo "No SQL files found in current directory"
         exit 1
     fi
-    
+
     if [ ! -f "$sql_file" ]; then
         log_error "SQL file not found: $sql_file"
         exit 1
     fi
-    
+
     log_info "Starting safe database import process..."
     log_info "SQL file: $sql_file"
     log_info "Target database: $POSTGRES_DB"
     log_info "PostgreSQL user: $POSTGRES_USER"
-    
+
     # Check prerequisites
     check_postgres_container
     wait_for_postgres
-    
+
     # Create backup
     local backup_file
     backup_file=$(backup_current_database)
-    
+
     # Import database safely
     import_database_safe "$sql_file" "$backup_file"
-    
+
     log_success "Safe database import process completed successfully!"
     log_info "Backup file saved as: $backup_file"
 }
