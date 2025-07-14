@@ -74,25 +74,105 @@ echo -e "${BLUE}Using incremental numbers:${NC}"
 echo -e "${YELLOW}  RS: $NEXT_RS_NUMBER${NC}"
 echo -e "${YELLOW}  CS: $NEXT_CS_NUMBER${NC}"
 echo -e "${YELLOW}  PO: $NEXT_PO_NUMBER_A, $NEXT_PO_NUMBER_B${NC}"
-echo -e "${YELLOW}  DR: $NEXT_DR_NUMBER${NC}"
+echo -e "${YELLOW}  RR: $NEXT_DR_NUMBER${NC}"
 echo -e "${YELLOW}  PR: $NEXT_PR_NUMBER${NC}"
 echo -e "${YELLOW}  IR: $NEXT_IR_NUMBER${NC}"
 echo ""
 
-# Clean up existing test data for this scenario
+# Clean up existing test data for this scenario (delete in proper order to respect foreign key constraints)
+# Instead of trying to delete specific numbers, clean up based on test data patterns
 echo -e "${YELLOW}Cleaning up existing Scenario 1 test data...${NC}"
-execute_sql "DELETE FROM rs_payment_requests WHERE pr_number = '$NEXT_PR_NUMBER';" "Clean payment requests"
-execute_sql "DELETE FROM invoice_reports WHERE ir_number = '$NEXT_IR_NUMBER';" "Clean invoice reports"
-execute_sql "DELETE FROM delivery_receipt_items WHERE dr_id IN (SELECT id FROM delivery_receipts WHERE dr_number = '$NEXT_DR_NUMBER');" "Clean delivery receipt items"
-execute_sql "DELETE FROM delivery_receipts WHERE dr_number = '$NEXT_DR_NUMBER';" "Clean delivery receipts"
+
+# 1. Delete payment requests for test requisitions with Force Close Test purpose
+execute_sql "
+DELETE FROM rs_payment_requests
+WHERE requisition_id IN (
+    SELECT id FROM requisitions
+    WHERE purpose = 'Force Close Test - Partial Delivery'
+);" "Clean payment requests for Force Close Test"
+
+# 2. Delete invoice reports for test requisitions
+execute_sql "
+DELETE FROM invoice_reports
+WHERE requisition_id IN (
+    SELECT id FROM requisitions
+    WHERE purpose = 'Force Close Test - Partial Delivery'
+);" "Clean invoice reports for Force Close Test"
+
+# 3. Delete delivery receipt items for test requisitions
+execute_sql "
+DELETE FROM delivery_receipt_items
+WHERE dr_id IN (
+    SELECT dr.id FROM delivery_receipts dr
+    JOIN requisitions r ON dr.requisition_id = r.id
+    WHERE r.purpose = 'Force Close Test - Partial Delivery'
+);" "Clean delivery receipt items for Force Close Test"
+
+# 4. Delete delivery receipts for test requisitions
+execute_sql "
+DELETE FROM delivery_receipts
+WHERE requisition_id IN (
+    SELECT id FROM requisitions
+    WHERE purpose = 'Force Close Test - Partial Delivery'
+);" "Clean delivery receipts for Force Close Test"
+
+# 5. Delete purchase order items for test requisitions
+execute_sql "
+DELETE FROM purchase_order_items
+WHERE purchase_order_id IN (
+    SELECT po.id FROM purchase_orders po
+    JOIN requisitions r ON po.requisition_id = r.id
+    WHERE r.purpose = 'Force Close Test - Partial Delivery'
+);" "Clean purchase order items for Force Close Test"
+
+# 6. Delete purchase orders for test requisitions
+execute_sql "
+DELETE FROM purchase_orders
+WHERE requisition_id IN (
+    SELECT id FROM requisitions
+    WHERE purpose = 'Force Close Test - Partial Delivery'
+);" "Clean purchase orders for Force Close Test"
+
+# 7. Delete canvass item suppliers for test requisitions
+execute_sql "
+DELETE FROM canvass_item_suppliers
+WHERE canvass_item_id IN (
+    SELECT ci.id FROM canvass_items ci
+    JOIN requisitions r ON ci.requisition_id = r.id
+    WHERE r.purpose = 'Force Close Test - Partial Delivery'
+);" "Clean canvass item suppliers for Force Close Test"
+
+# 8. Delete canvass items for test requisitions
+execute_sql "
+DELETE FROM canvass_items
+WHERE requisition_id IN (
+    SELECT id FROM requisitions
+    WHERE purpose = 'Force Close Test - Partial Delivery'
+);" "Clean canvass items for Force Close Test"
+
+# 9. Delete canvass requisitions for test requisitions
+execute_sql "
+DELETE FROM canvass_requisitions
+WHERE requisition_id IN (
+    SELECT id FROM requisitions
+    WHERE purpose = 'Force Close Test - Partial Delivery'
+);" "Clean canvass requisitions for Force Close Test"
+
+# 10. Delete requisition item lists for test requisitions
+execute_sql "
+DELETE FROM requisition_item_lists
+WHERE requisition_id IN (
+    SELECT id FROM requisitions
+    WHERE purpose = 'Force Close Test - Partial Delivery'
+);" "Clean requisition items for Force Close Test"
+
+# 11. Delete test supplier (specific to this scenario)
 execute_sql "DELETE FROM suppliers WHERE name = 'Test Supplier Corp';" "Clean test supplier"
-execute_sql "DELETE FROM purchase_order_items WHERE purchase_order_id IN (SELECT id FROM purchase_orders WHERE po_number IN ('$NEXT_PO_NUMBER_A', '$NEXT_PO_NUMBER_B'));" "Clean primary and secondary PO items"
-execute_sql "DELETE FROM purchase_orders WHERE po_number IN ('$NEXT_PO_NUMBER_A', '$NEXT_PO_NUMBER_B');" "Clean purchase orders"
-execute_sql "DELETE FROM canvass_item_suppliers WHERE canvass_item_id IN (SELECT id FROM canvass_items WHERE canvass_requisition_id IN (SELECT id FROM canvass_requisitions WHERE requisition_id IN (SELECT id FROM requisitions WHERE rs_number = '$NEXT_RS_NUMBER')));" "Clean canvass item suppliers"
-execute_sql "DELETE FROM canvass_items WHERE canvass_requisition_id IN (SELECT id FROM canvass_requisitions WHERE requisition_id IN (SELECT id FROM requisitions WHERE rs_number = '$NEXT_RS_NUMBER'));" "Clean canvass items"
-execute_sql "DELETE FROM canvass_requisitions WHERE requisition_id IN (SELECT id FROM requisitions WHERE rs_number = '$NEXT_RS_NUMBER');" "Clean canvass requisitions"
-execute_sql "DELETE FROM requisition_item_lists WHERE requisition_id IN (SELECT id FROM requisitions WHERE rs_number = '$NEXT_RS_NUMBER');" "Clean requisition items"
-execute_sql "DELETE FROM requisitions WHERE rs_number = '$NEXT_RS_NUMBER';" "Clean requisitions"
+
+# 12. Delete test requisitions
+execute_sql "
+DELETE FROM requisitions
+WHERE purpose = 'Force Close Test - Partial Delivery';" "Clean test requisitions"
 
 echo -e "${GREEN}✓ Cleanup completed${NC}"
 echo ""
@@ -291,6 +371,104 @@ SELECT '$NEXT_PR_NUMBER', 'AA', r.id, po.id, 'Closed', false, 4500.00, NOW(), NO
 FROM requisitions r, purchase_orders po
 WHERE r.rs_number = '$NEXT_RS_NUMBER'
   AND po.po_number = '$NEXT_PO_NUMBER_A';" "Create Scenario 1 payment request (CLOSED) - calculated amount"
+
+# ============================================================================
+# ADD DRAFT AND PENDING APPROVAL DOCUMENTS FOR FORCE CLOSE TESTING
+# ============================================================================
+
+# Get next available numbers for draft/pending documents
+NEXT_CS_DRAFT_NUMBER=$(printf "%08d" $((10#$NEXT_CS_NUMBER + 1)))
+NEXT_RR_DRAFT_NUMBER=$(printf "%08d" $((10#$NEXT_DR_NUMBER + 1)))
+NEXT_IR_DRAFT_NUMBER=$(printf "%08d" $((10#$NEXT_IR_NUMBER + 1)))
+NEXT_PR_DRAFT_NUMBER=$(printf "%08d" $((10#$NEXT_PR_NUMBER + 1)))
+NEXT_PR_PENDING_NUMBER=$(printf "%08d" $((10#$NEXT_PR_NUMBER + 2)))
+
+echo -e "${BLUE}Adding draft and pending approval documents for force close testing...${NC}"
+echo -e "${YELLOW}  CS Draft: $NEXT_CS_DRAFT_NUMBER${NC}"
+echo -e "${YELLOW}  RR Draft: $NEXT_RR_DRAFT_NUMBER${NC}"
+echo -e "${YELLOW}  IR Draft: $NEXT_IR_DRAFT_NUMBER${NC}"
+echo -e "${YELLOW}  PR Draft: $NEXT_PR_DRAFT_NUMBER${NC}"
+echo -e "${YELLOW}  PR Pending: $NEXT_PR_PENDING_NUMBER${NC}"
+
+# 1. Create DRAFT Canvass Sheet
+execute_sql "
+INSERT INTO canvass_requisitions (
+    requisition_id, draft_cs_number, cs_letter, status, created_at, updated_at
+)
+SELECT r.id, '$NEXT_CS_DRAFT_NUMBER', 'BB', 'draft', NOW(), NOW()
+FROM requisitions r WHERE r.rs_number = '$NEXT_RS_NUMBER';" "Create DRAFT canvass sheet"
+
+# 2. Create PENDING FOR APPROVAL Canvass Sheet
+execute_sql "
+INSERT INTO canvass_requisitions (
+    requisition_id, cs_number, cs_letter, status, created_at, updated_at
+)
+SELECT r.id, '$(printf "%08d" $((10#$NEXT_CS_DRAFT_NUMBER + 1)))', 'CC', 'for_approval', NOW(), NOW()
+FROM requisitions r WHERE r.rs_number = '$NEXT_RS_NUMBER';" "Create PENDING FOR APPROVAL canvass sheet"
+
+# 3. Create DRAFT Receiving Report (Delivery Receipt)
+execute_sql "
+INSERT INTO delivery_receipts (
+    draft_dr_number, requisition_id, po_id, status, company_code, is_draft,
+    latest_delivery_status, latest_delivery_date, supplier,
+    created_at, updated_at
+)
+SELECT '$NEXT_RR_DRAFT_NUMBER', r.id, po.id, 'Draft', '12553', true,
+       'Draft', NOW(), 'Test Supplier Corp', NOW(), NOW()
+FROM purchase_orders po, requisitions r
+WHERE po.po_number = '$NEXT_PO_NUMBER_A' AND r.rs_number = '$NEXT_RS_NUMBER';" "Create DRAFT receiving report"
+
+# Note: Receiving Reports don't have a 'FOR_APPROVAL' status in the current schema
+# Only 'Draft' and 'Delivered' statuses exist
+
+# 5. Create DRAFT Invoice Report
+execute_sql "
+INSERT INTO invoice_reports (
+    ir_draft_number, requisition_id, purchase_order_id, company_code,
+    supplier_invoice_no, issued_invoice_date, invoice_amount, is_draft,
+    status, created_by, created_at, updated_at
+)
+SELECT '$NEXT_IR_DRAFT_NUMBER', r.id, po.id, '12553',
+       'SUP-INV-DRAFT', NOW(), 1000.00, true,
+       'IR Draft', 150, NOW(), NOW()
+FROM requisitions r, purchase_orders po
+WHERE r.rs_number = '$NEXT_RS_NUMBER' AND po.po_number = '$NEXT_PO_NUMBER_A';" "Create DRAFT invoice report"
+
+# Note: Invoice Reports don't have a clear 'FOR_APPROVAL' status in current schema
+# Available statuses are: 'IR Draft', 'Invoice Received', 'approved'
+# 'approved' means already approved, not pending approval
+
+# 7. Create DRAFT Payment Request
+execute_sql "
+INSERT INTO rs_payment_requests (
+    draft_pr_number, pr_letter, requisition_id, purchase_order_id, status, is_draft,
+    total_amount, created_at, updated_at
+)
+SELECT '$NEXT_PR_DRAFT_NUMBER', 'BB', r.id, po.id, 'PR Draft', true, 2000.00, NOW(), NOW()
+FROM requisitions r, purchase_orders po
+WHERE r.rs_number = '$NEXT_RS_NUMBER'
+  AND po.po_number = '$NEXT_PO_NUMBER_A';" "Create DRAFT payment request"
+
+# 8. Create PENDING FOR APPROVAL Payment Request
+execute_sql "
+INSERT INTO rs_payment_requests (
+    pr_number, pr_letter, requisition_id, purchase_order_id, status, is_draft,
+    total_amount, created_at, updated_at
+)
+SELECT '$NEXT_PR_PENDING_NUMBER', 'CC', r.id, po.id, 'For PR Approval', false, 2500.00, NOW(), NOW()
+FROM requisitions r, purchase_orders po
+WHERE r.rs_number = '$NEXT_RS_NUMBER'
+  AND po.po_number = '$NEXT_PO_NUMBER_A';" "Create PENDING FOR APPROVAL payment request"
+
+echo -e "${GREEN}✓ Draft and pending approval documents created successfully${NC}"
+echo -e "${YELLOW}Documents to be cancelled during force close:${NC}"
+echo -e "${YELLOW}  - CS Draft: $NEXT_CS_DRAFT_NUMBER (status='draft' → should become 'cs_cancelled')${NC}"
+echo -e "${YELLOW}  - CS Pending: $(printf "%08d" $((10#$NEXT_CS_DRAFT_NUMBER + 1))) (status='for_approval' → should become 'cs_cancelled')${NC}"
+echo -e "${YELLOW}  - RR Draft: $NEXT_RR_DRAFT_NUMBER (status='Draft' → should become 'rr_cancelled')${NC}"
+echo -e "${YELLOW}  - IR Draft: $NEXT_IR_DRAFT_NUMBER (status='IR Draft' → should become 'ir_cancelled')${NC}"
+echo -e "${YELLOW}  - PR Draft: $NEXT_PR_DRAFT_NUMBER (status='PR Draft' → should become 'pr_cancelled')${NC}"
+echo -e "${YELLOW}  - PR Pending: $NEXT_PR_PENDING_NUMBER (status='For PR Approval' → should become 'pr_cancelled')${NC}"
+echo -e "${YELLOW}Note: RR and IR don't have clear 'pending approval' statuses in current schema${NC}"
 
 echo -e "${GREEN}✓ Scenario 1 setup completed successfully${NC}"
 echo -e "${YELLOW}Expected Result: Button VISIBLE and ENABLED (Partial Delivery)${NC}"
