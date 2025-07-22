@@ -68,6 +68,11 @@ services:
       - CITYLAND_API_URL=${CITYLAND_API_URL}
       - CITYLAND_ACCOUNTING_URL=${CITYLAND_ACCOUNTING_URL}
 
+      # Redis configuration
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+
       # File upload settings (local volume)
       - UPLOAD_DRIVER=local
       - UPLOAD_PATH=/app/uploads
@@ -93,6 +98,7 @@ services:
       - ../../prs-backend/src:/app/src:ro
     depends_on:
       - postgres
+      - redis
     networks:
       - prs_local_network
     healthcheck:
@@ -293,6 +299,38 @@ services:
     profiles:
       - monitoring
 
+  # Redis - Caching and Session Store (Local)
+  redis:
+    image: redis:7.2-alpine
+    container_name: prs-local-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory ${REDIS_MAX_MEMORY:-256mb}
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+    volumes:
+      - redis_data:/data
+    networks:
+      - prs_local_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: ${REDIS_MEMORY_LIMIT:-256m}
+
 networks:
   prs_local_network:
     driver: bridge
@@ -314,4 +352,6 @@ volumes:
   prometheus_data:
     driver: local
   grafana_data:
+    driver: local
+  redis_data:
     driver: local
