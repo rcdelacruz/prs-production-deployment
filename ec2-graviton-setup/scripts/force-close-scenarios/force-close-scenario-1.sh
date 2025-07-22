@@ -29,7 +29,7 @@ fi
 
 # Set default values
 DB_USER=${POSTGRES_USER:-prs_user}
-DB_NAME=${POSTGRES_DB:-prs_production}
+DB_NAME=${POSTGRES_DB:-prs_preprod}
 DB_PASSWORD=${POSTGRES_PASSWORD:-p*Ecp5YP2cvctg}
 
 echo -e "${BLUE}============================================================================${NC}"
@@ -176,6 +176,8 @@ WHERE purpose = 'Force Close Test - Partial Delivery';" "Clean test requisitions
 
 echo -e "${GREEN}✓ Cleanup completed${NC}"
 echo ""
+
+exit 1
 
 # Create requisition
 execute_sql "

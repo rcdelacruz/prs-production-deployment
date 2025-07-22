@@ -96,6 +96,11 @@ services:
       - UPLOAD_DRIVER=local
       - UPLOAD_PATH=/app/uploads
 
+      # Redis Configuration
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+
       # Monitoring
       - PROMETHEUS_ENABLED=${PROMETHEUS_ENABLED:-true}
       - LOKI_ENABLED=false
@@ -112,6 +117,8 @@ services:
       - logs_data:/app/logs
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     networks:
       prs_ec2_network:
@@ -224,6 +231,120 @@ services:
         limits:
           memory: ${POSTGRES_MEMORY_LIMIT:-1.5g}
           cpus: '1.0'
+
+  # Redis - Queue and Cache (EC2 Production - Memory Optimized)
+  redis:
+    image: redis:7-alpine
+    container_name: prs-ec2-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD}
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory ${REDIS_MEMORY_LIMIT:-256m}
+      --maxmemory-policy allkeys-lru
+      --tcp-keepalive 60
+      --timeout 0
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+      --loglevel notice
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    networks:
+      prs_ec2_network:
+        ipv4_address: 172.22.0.35
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: ${REDIS_MEMORY_LIMIT:-256m}
+          cpus: '0.25'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "${LOG_MAX_SIZE:-100m}"
+        max-file: "3"
+        compress: "true"
+        labels: "service=redis,environment=production"
+
+  # Redis Worker - Background Job Processing (EC2 Production)
+  redis-worker:
+    image: prs-backend-worker:${VERSION:-latest}
+    container_name: prs-ec2-redis-worker
+    restart: unless-stopped
+    build:
+      context: ../../prs-backend-a
+      dockerfile: Dockerfile.worker
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "${LOG_MAX_SIZE:-100m}"
+        max-file: "3"
+        compress: "true"
+        labels: "service=redis-worker,environment=production"
+    environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+
+      # Database configuration
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_PORT=5432
+      - DIALECT=${DIALECT:-postgres}
+      - DISABLE_SSL=${DISABLE_SSL:-false}
+
+      # SSL Configuration (Production SSL Enabled)
+      - POSTGRES_SSL_ENABLED=${POSTGRES_SSL_ENABLED:-true}
+      - POSTGRES_SSL_REQUIRE=${POSTGRES_SSL_REQUIRE:-false}
+      - POSTGRES_SSL_REJECT_UNAUTHORIZED=${POSTGRES_SSL_REJECT_UNAUTHORIZED:-false}
+
+      # Database Pool Configuration
+      - POOL_MIN=${POOL_MIN:-1}
+      - POOL_MAX=${POOL_MAX:-3}
+      - POOL_ACQUIRE=${POOL_ACQUIRE:-30000}
+      - POOL_IDLE=${POOL_IDLE:-10000}
+      - POOL_EVICTION=${POOL_EVICTION:-20000}
+
+      # Redis Configuration
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+
+      # Application secrets
+      - JWT_SECRET=${JWT_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - OTP_KEY=${OTP_KEY}
+      - PASS_SECRET=${PASS_SECRET}
+
+      # External API Configuration
+      - CITYLAND_API_URL=${CITYLAND_API_URL}
+      - CITYLAND_ACCOUNTING_URL=${CITYLAND_ACCOUNTING_URL}
+    volumes:
+      - logs_data:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      prs_ec2_network:
+        ipv4_address: 172.22.0.40
+    deploy:
+      resources:
+        limits:
+          memory: ${WORKER_MEMORY_LIMIT:-512m}
+          cpus: '0.5'
 
   # Adminer - Database Management (EC2 - Internal Only)
   adminer:
@@ -381,6 +502,8 @@ networks:
 
 volumes:
   database_data:
+    driver: local
+  redis_data:
     driver: local
   uploads_data:
     driver: local

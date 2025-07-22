@@ -515,7 +515,39 @@ show_logs() {
 }
 
 init_database() {
-    log_info "Initializing database..."
+    local operation="${1:-both}"  # Default to 'both' if no parameter provided
+
+    case "$operation" in
+        "migrate"|"migration"|"migrations")
+            log_info "Running database migrations only..."
+            run_database_migrations
+            ;;
+        "seed"|"seeder"|"seeders")
+            log_info "Running database seeders only..."
+            run_database_seeders
+            ;;
+        "both"|"all"|"")
+            log_info "Initializing database (migrations + seeders)..."
+            run_database_migrations
+            run_database_seeders
+            ;;
+        *)
+            log_error "Invalid operation: $operation"
+            log_info "Valid options: migrate, seed, both (default)"
+            log_info "Usage: init-db [migrate|seed|both]"
+            return 1
+            ;;
+    esac
+
+    # Initialize Redis after database setup
+    log_info "Initializing Redis for background job processing..."
+    init_redis
+
+    log_success "Database and Redis initialization completed"
+}
+
+run_database_migrations() {
+    log_info "Running database migrations..."
 
     # Wait for database to be ready
     wait_for_database
@@ -523,23 +555,21 @@ init_database() {
     # Check if backend container is running
     cd "$PROJECT_DIR"
     if ! docker-compose ps backend | grep -q "Up"; then
-        log_error "Backend container is not running. Cannot initialize database."
+        log_error "Backend container is not running. Cannot run migrations."
         return 1
     fi
 
     # Determine which scripts to use based on NODE_ENV
     local migrate_script="migrate:dev"
-    local seed_script="seed:dev"
 
     # Load environment to check NODE_ENV
     if [ -f "$PROJECT_DIR/.env" ]; then
         source "$PROJECT_DIR/.env"
         if [ "${NODE_ENV:-development}" = "production" ]; then
             migrate_script="migrate:prod"
-            seed_script="seed:prod"
-            log_info "Using production database scripts"
+            log_info "Using production migration script"
         else
-            log_info "Using development database scripts"
+            log_info "Using development migration script"
         fi
     fi
 
@@ -586,6 +616,35 @@ init_database() {
         fi
     else
         log_warning "Database migrations failed - this may be normal if already migrated"
+        return 1
+    fi
+}
+
+run_database_seeders() {
+    log_info "Running database seeders..."
+
+    # Wait for database to be ready
+    wait_for_database
+
+    # Check if backend container is running
+    cd "$PROJECT_DIR"
+    if ! docker-compose ps backend | grep -q "Up"; then
+        log_error "Backend container is not running. Cannot run seeders."
+        return 1
+    fi
+
+    # Determine which scripts to use based on NODE_ENV
+    local seed_script="seed:dev"
+
+    # Load environment to check NODE_ENV
+    if [ -f "$PROJECT_DIR/.env" ]; then
+        source "$PROJECT_DIR/.env"
+        if [ "${NODE_ENV:-development}" = "production" ]; then
+            seed_script="seed:prod"
+            log_info "Using production seeder script"
+        else
+            log_info "Using development seeder script"
+        fi
     fi
 
     # Run database seeders using the correct script names from package.json
@@ -594,9 +653,8 @@ init_database() {
         log_success "Database seeders completed"
     else
         log_warning "Database seeders failed - this may be normal if data already exists"
+        return 1
     fi
-
-    log_success "Database initialization completed"
 }
 
 wait_for_database() {
@@ -617,6 +675,88 @@ wait_for_database() {
 
     log_error "Database failed to become ready after $max_attempts attempts"
     return 1
+}
+
+wait_for_redis() {
+    log_info "Waiting for Redis to be ready..."
+    local max_attempts=30
+    local attempt=1
+
+    while [ $attempt -le $max_attempts ]; do
+        if [ -n "$REDIS_PASSWORD" ]; then
+            if docker exec prs-ec2-redis redis-cli --no-auth-warning -a "$REDIS_PASSWORD" ping > /dev/null 2>&1; then
+                log_success "Redis is ready"
+                return 0
+            fi
+        else
+            if docker exec prs-ec2-redis redis-cli ping > /dev/null 2>&1; then
+                log_success "Redis is ready"
+                return 0
+            fi
+        fi
+
+        log_info "Redis not ready yet (attempt $attempt/$max_attempts), waiting..."
+        sleep 2
+        attempt=$((attempt + 1))
+    done
+
+    log_error "Redis failed to become ready after $max_attempts attempts"
+    return 1
+}
+
+init_redis() {
+    log_info "Initializing Redis for queue management..."
+
+    # Wait for Redis to be ready
+    wait_for_redis
+
+    # Check Redis configuration
+    log_info "Checking Redis configuration..."
+    if [ -n "$REDIS_PASSWORD" ]; then
+        REDIS_INFO=$(docker exec prs-ec2-redis redis-cli --no-auth-warning -a "$REDIS_PASSWORD" info server 2>/dev/null || echo "")
+    else
+        REDIS_INFO=$(docker exec prs-ec2-redis redis-cli info server 2>/dev/null || echo "")
+    fi
+
+    if [ -n "$REDIS_INFO" ]; then
+        log_success "Redis is responding and configured properly"
+
+        # Show Redis memory configuration
+        if [ -n "$REDIS_PASSWORD" ]; then
+            REDIS_MEMORY=$(docker exec prs-ec2-redis redis-cli --no-auth-warning -a "$REDIS_PASSWORD" config get maxmemory 2>/dev/null | tail -1)
+        else
+            REDIS_MEMORY=$(docker exec prs-ec2-redis redis-cli config get maxmemory 2>/dev/null | tail -1)
+        fi
+
+        if [ "$REDIS_MEMORY" != "0" ]; then
+            log_info "Redis memory limit: $REDIS_MEMORY bytes"
+        else
+            log_info "Redis memory limit: unlimited"
+        fi
+
+        # Test queue functionality
+        log_info "Testing Redis queue functionality..."
+        if [ -n "$REDIS_PASSWORD" ]; then
+            docker exec prs-ec2-redis redis-cli --no-auth-warning -a "$REDIS_PASSWORD" set test:queue:init "$(date)" > /dev/null 2>&1
+            docker exec prs-ec2-redis redis-cli --no-auth-warning -a "$REDIS_PASSWORD" del test:queue:init > /dev/null 2>&1
+        else
+            docker exec prs-ec2-redis redis-cli set test:queue:init "$(date)" > /dev/null 2>&1
+            docker exec prs-ec2-redis redis-cli del test:queue:init > /dev/null 2>&1
+        fi
+        log_success "Redis queue functionality test passed"
+
+        # Check if Redis worker is running
+        if docker-compose ps redis-worker | grep -q "Up"; then
+            log_success "Redis worker container is running"
+        else
+            log_warning "Redis worker container is not running - background jobs may not process"
+        fi
+    else
+        log_error "Redis is not responding properly"
+        return 1
+    fi
+
+    log_success "Redis initialization completed"
 }
 
 validate_foreign_keys() {
@@ -1089,7 +1229,8 @@ show_help() {
     echo "  pull                Pull latest code from configured repositories (safe)"
     echo "  pull-force          Force pull code (overwrites local changes)"
     echo "  build               Build Docker images for ARM64"
-    echo "  init-db             Initialize database (includes TimescaleDB setup)"
+    echo "  init-db [option]    Initialize database (includes TimescaleDB setup)"
+    echo "                      Options: migrate (migrations only), seed (seeders only), both (default)"
     echo "  import-db <file>    Import SQL dump file with enhanced constraint handling"
     echo "  import-db-safe <file> Import SQL dump using safe import script"
     echo "  clean-db            Clean database (drop and recreate)"
@@ -1109,12 +1250,23 @@ show_help() {
     echo "  $0 validate-fk                  # Check for foreign key constraint violations"
     echo ""
     echo "TimescaleDB Management:"
-    echo "  $0 init-db                      # Initialize database (includes TimescaleDB + compression)"
+    echo "  $0 init-db [option]             # Initialize database (includes TimescaleDB + compression)"
+    echo "                                  # Options: migrate, seed, both (default)"
+    echo "  $0 init-db migrate              # Run migrations only"
+    echo "  $0 init-db seed                 # Run seeders only"
     echo "  $0 timescaledb-status           # Show TimescaleDB status and hypertables"
     echo "  $0 timescaledb-backup           # Create TimescaleDB backup (binary + SQL)"
     echo "  $0 timescaledb-optimize         # Optimize TimescaleDB performance"
     echo "  $0 timescaledb-compression      # Setup compression policies for long-term growth"
     echo "  $0 timescaledb-maintenance [cmd] # Advanced maintenance (setup-compression, compress, optimize, status, storage, full-maintenance)"
+    echo ""
+    echo "Redis Management:"
+    echo "  $0 redis-info                   # Show Redis server information and status"
+    echo "  $0 redis-ping                   # Test Redis connectivity"
+    echo "  $0 redis-monitor                # Monitor Redis queues and job status"
+    echo "  $0 redis-backup                 # Create Redis backup"
+    echo "  $0 redis-restart                # Restart Redis container"
+    echo "  $0 redis-logs                   # Show Redis container logs"
     echo ""
     echo "Repository Configuration (via .env file):"
     echo "  REPOS_BASE_DIR      Base directory for repositories (default: /home/ubuntu/prs-prod)"
@@ -1233,7 +1385,7 @@ case "${1:-deploy}" in
         ;;
     "init-db")
         load_environment
-        init_database
+        init_database "$2"
         ;;
     "import-db")
         load_environment
@@ -1333,6 +1485,60 @@ case "${1:-deploy}" in
             "$SCRIPT_DIR/timescaledb-maintenance.sh" setup-compression
         else
             log_error "TimescaleDB maintenance script not found"
+            exit 1
+        fi
+        ;;
+    "redis-info")
+        load_environment
+        if [ -f "$SCRIPT_DIR/manage-redis.sh" ]; then
+            "$SCRIPT_DIR/manage-redis.sh" info
+        else
+            log_error "Redis management script not found"
+            exit 1
+        fi
+        ;;
+    "redis-ping")
+        load_environment
+        if [ -f "$SCRIPT_DIR/manage-redis.sh" ]; then
+            "$SCRIPT_DIR/manage-redis.sh" ping
+        else
+            log_error "Redis management script not found"
+            exit 1
+        fi
+        ;;
+    "redis-monitor")
+        load_environment
+        if [ -f "$SCRIPT_DIR/manage-redis.sh" ]; then
+            "$SCRIPT_DIR/manage-redis.sh" monitor
+        else
+            log_error "Redis management script not found"
+            exit 1
+        fi
+        ;;
+    "redis-backup")
+        load_environment
+        if [ -f "$SCRIPT_DIR/manage-redis.sh" ]; then
+            "$SCRIPT_DIR/manage-redis.sh" backup
+        else
+            log_error "Redis management script not found"
+            exit 1
+        fi
+        ;;
+    "redis-restart")
+        load_environment
+        if [ -f "$SCRIPT_DIR/manage-redis.sh" ]; then
+            "$SCRIPT_DIR/manage-redis.sh" restart
+        else
+            log_error "Redis management script not found"
+            exit 1
+        fi
+        ;;
+    "redis-logs")
+        load_environment
+        if [ -f "$SCRIPT_DIR/manage-redis.sh" ]; then
+            "$SCRIPT_DIR/manage-redis.sh" logs
+        else
+            log_error "Redis management script not found"
             exit 1
         fi
         ;;
