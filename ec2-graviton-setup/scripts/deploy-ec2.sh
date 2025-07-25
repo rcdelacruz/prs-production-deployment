@@ -370,9 +370,9 @@ build_images() {
     export COMPOSE_DOCKER_CLI_BUILD=1
 
     # Method 1: Use docker-compose build (recommended - uses docker-compose.yml configuration)
-    log_info "Building images using docker-compose (uses Dockerfile.prod as configured)..."
-    if docker-compose build --parallel backend frontend; then
-        log_success "Docker images built successfully using docker-compose"
+    log_info "Building images using docker-compose with --no-cache (uses Dockerfile.prod as configured)..."
+    if docker-compose build --no-cache --parallel backend frontend; then
+        log_success "Docker images built successfully using docker-compose with --no-cache"
         return 0
     else
         log_warning "docker-compose build failed, falling back to direct docker build..."
@@ -382,8 +382,8 @@ build_images() {
     # Build backend image using Dockerfile.prod
     local backend_path="$repos_base_dir/$backend_repo_name"
     if [ -d "$backend_path" ]; then
-        log_info "Building backend image for ARM64 from: $backend_path using Dockerfile.prod"
-        docker build --platform linux/arm64 -f "$backend_path/Dockerfile.prod" -t prs-backend:latest "$backend_path"
+        log_info "Building backend image for ARM64 from: $backend_path using Dockerfile.prod with --no-cache"
+        docker build --no-cache --platform linux/arm64 -f "$backend_path/Dockerfile.prod" -t prs-backend:latest "$backend_path"
     else
         log_warning "Backend directory not found: $backend_path. Skipping backend build."
     fi
@@ -391,8 +391,8 @@ build_images() {
     # Build frontend image using Dockerfile.prod
     local frontend_path="$repos_base_dir/$frontend_repo_name"
     if [ -d "$frontend_path" ]; then
-        log_info "Building frontend image for ARM64 from: $frontend_path using Dockerfile.prod"
-        docker build --platform linux/arm64 -f "$frontend_path/Dockerfile.prod" -t prs-frontend:latest "$frontend_path"
+        log_info "Building frontend image for ARM64 from: $frontend_path using Dockerfile.prod with --no-cache"
+        docker build --no-cache --platform linux/arm64 -f "$frontend_path/Dockerfile.prod" -t prs-frontend:latest "$frontend_path"
     else
         log_warning "Frontend directory not found: $frontend_path. Skipping frontend build."
     fi
