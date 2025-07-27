@@ -415,6 +415,8 @@ services:
       - GF_SECURITY_ALLOW_EMBEDDING=true
       - GF_AUTH_ANONYMOUS_ENABLED=false
       - GF_INSTALL_PLUGINS=grafana-piechart-panel
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
       - grafana_data:/var/lib/grafana
       - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -435,6 +437,30 @@ services:
         limits:
           memory: ${GRAFANA_MEMORY_LIMIT:-256m}
           cpus: '0.25'
+    profiles:
+      - monitoring
+
+  # Node Exporter - System Metrics (EC2 - Internal Only)
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: prs-ec2-node-exporter
+    restart: unless-stopped
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    networks:
+      - prs_ec2_network
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+          cpus: '0.1'
     profiles:
       - monitoring
 

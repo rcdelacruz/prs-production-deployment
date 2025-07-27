@@ -1,5 +1,6 @@
 # PRS Grafana Dashboard Provisioning
 # Auto-load dashboards for EC2 Graviton monitoring
+# Merged configuration supporting both local and production dashboards
 
 apiVersion: 1
 
@@ -9,7 +10,8 @@ providers:
     folder: 'PRS Monitoring'
     type: file
     disableDeletion: false
-    updateIntervalSeconds: 10
+    updateIntervalSeconds: 60
     allowUiUpdates: true
+    editable: true
     options:
       path: /var/lib/grafana/dashboards
