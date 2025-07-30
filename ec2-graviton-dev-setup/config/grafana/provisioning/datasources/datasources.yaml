@@ -1,0 +1,40 @@
+# PRS Grafana Datasource Configuration
+# Production datasources for EC2 Graviton monitoring
+# Merged from working local setup
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus_ec2_ds
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090/prometheus
+    isDefault: true
+    editable: true
+    jsonData:
+      httpMethod: POST
+      manageAlerts: false
+      prometheusType: Prometheus
+      prometheusVersion: 2.40.0
+      cacheLevel: 'High'
+      disableMetricsLookup: false
+      customQueryParameters: ''
+      timeInterval: '30s'
+    secureJsonData: {}
+    version: 1
+
+  - name: PostgreSQL
+    uid: postgres_ec2_ds
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    database: prs_preprod
+    user: $POSTGRES_USER
+    secureJsonData:
+      password: $POSTGRES_PASSWORD
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1500
+      timescaledb: true
+    editable: true

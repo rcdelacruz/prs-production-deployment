@@ -1,0 +1,534 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_POSTGRESQL",
+      "label": "PostgreSQL",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "postgres",
+      "pluginName": "PostgreSQL"
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": 8,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 2,
+      "panels": [],
+      "title": "Requisitions",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "postgres_ec2_ds"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto",
+              "wrapText": false
+            },
+            "filterable": true,
+            "inspect": true
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 20,
+        "w": 24,
+        "x": 0,
+        "y": 1
+      },
+      "id": 1,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "enablePagination": true,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "12.0.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "postgres_ec2_ds"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\r\n  r.id,\r\n  CASE\r\n    WHEN r.rs_number IS NOT NULL AND r.rs_number != ''\r\n    THEN 'RS-' || r.rs_letter || r.rs_number\r\n    ELSE 'TMP-RS-' || r.draft_rs_number\r\n  END AS rs_number,\r\n  r.purpose,\r\n  r.status,\r\n  r.date_required,\r\n  r.created_at,\r\n  u.username AS created_by,\r\n  c.name AS company,\r\n  d.name AS department,\r\n  p.name AS project\r\nFROM\r\n  requisitions AS r\r\nLEFT JOIN\r\n  users AS u ON r.created_by = u.id\r\nLEFT JOIN\r\n  companies AS c ON r.company_id = c.id\r\nLEFT JOIN\r\n  departments AS d ON r.department_id = d.id\r\nLEFT JOIN\r\n  projects AS p ON r.project_id = p.id\r\nWHERE\r\n  r.status = ANY('{${status_var:csv}}')\r\nORDER BY\r\n  r.id DESC;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Existing Requisitions",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "id": 3,
+      "panels": [],
+      "title": "Histories",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "postgres_ec2_ds"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": true
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 18,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "id": 4,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "enablePagination": true,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": []
+      },
+      "pluginVersion": "12.0.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "postgres_ec2_ds"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT *\r\nFROM (\r\n    -- Canvass Events\r\n    SELECT\r\n        h.created_at AS event_time,\r\n        h.requisition_id,\r\n        'Canvass' AS event_type,\r\n        'Canvassed item \"' || h.item || '\" from ' || h.supplier AS description,\r\n        h.status,\r\n        h.canvass_number AS reference_no,\r\n        al.action_type,\r\n        al.url,\r\n        al.username\r\n    FROM\r\n        requisition_canvass_histories h\r\n    LEFT JOIN LATERAL (\r\n        SELECT\r\n            a.action_type,\r\n            a.metadata->>'url' AS url,\r\n            a.metadata->'userDetails'->>'username' AS username\r\n        FROM audit_logs a\r\n        WHERE a.created_at BETWEEN h.created_at - '1 second'::interval AND h.created_at + '1 second'::interval AND a.module = 'canvass'\r\n        ORDER BY abs(extract(epoch from h.created_at) - extract(epoch from a.created_at))\r\n        LIMIT 1\r\n    ) al ON true\r\n    UNION ALL\r\n\r\n    -- Delivery Events\r\n    SELECT\r\n        h.created_at AS event_time,\r\n        h.requisition_id,\r\n        'Delivery' AS event_type,\r\n        'Delivered ' || h.quantity_delivered || ' units from ' || h.supplier AS description,\r\n        h.status,\r\n        h.dr_number AS reference_no,\r\n        al.action_type,\r\n        al.url,\r\n        al.username\r\n    FROM\r\n        requisition_delivery_histories h\r\n    LEFT JOIN LATERAL (\r\n        SELECT\r\n            a.action_type,\r\n            a.metadata->>'url' AS url,\r\n            a.metadata->'userDetails'->>'username' AS username\r\n        FROM audit_logs a\r\n        WHERE a.created_at BETWEEN h.created_at - '1 second'::interval AND h.created_at + '1 second'::interval AND a.module = 'delivery'\r\n        ORDER BY abs(extract(epoch from h.created_at) - extract(epoch from a.created_at))\r\n        LIMIT 1\r\n    ) al ON true\r\n    UNION ALL\r\n\r\n    -- -- Item Events (This section is modified with your new logic)\r\n    -- SELECT\r\n    --     h.created_at AS event_time,\r\n    --     h.requisition_id,\r\n    --     'Item Added' AS event_type,\r\n    --     'Requested ' || h.quantity_requested || ' units of \"' || h.item || '\"' AS description,\r\n    --     CASE\r\n    --         WHEN r.status IS NOT NULL AND r.status != '' THEN r.status\r\n    --         WHEN r.draft_rs_number IS NOT NULL AND r.draft_rs_number != '' THEN 'Draft'\r\n    --         ELSE NULL\r\n    --     END AS status,\r\n    --     CASE    -- Use your conditional logic to build the reference number\r\n    --         WHEN r.rs_number IS NOT NULL AND r.rs_number != ''\r\n    --         THEN 'RS-' || r.company_code || r.rs_letter || r.rs_number\r\n    --         ELSE 'TMP-RS-' || r.draft_rs_number\r\n    --     END AS reference_no,\r\n    --     al.action_type,\r\n    --     al.url,\r\n    --     al.username\r\n    -- FROM\r\n    --     requisition_item_histories h\r\n    -- LEFT JOIN \r\n    --     requisitions r ON h.requisition_id = r.id\r\n    -- LEFT JOIN LATERAL (\r\n    --     SELECT\r\n    --         a.action_type,\r\n    --         a.metadata->>'url' AS url,\r\n    --         a.metadata->'userDetails'->>'username' AS username\r\n    --     FROM audit_logs a\r\n    --     WHERE a.created_at BETWEEN h.created_at - '1 second'::interval AND h.created_at + '1 second'::interval AND a.module LIKE 'requisition%' AND a.action_type = 'insert'\r\n    --     ORDER BY abs(extract(epoch from h.created_at) - extract(epoch from a.created_at))\r\n    --     LIMIT 1\r\n    -- ) al ON true\r\n    -- UNION ALL\r\n\r\n    -- Order Events\r\n    SELECT\r\n        h.created_at AS event_time,\r\n        h.requisition_id,\r\n        'Order' AS event_type,\r\n        'PO created for ' || h.supplier AS description,\r\n        h.status,\r\n        h.po_number AS reference_no,\r\n        al.action_type,\r\n        al.url,\r\n        al.username\r\n    FROM\r\n        requisition_order_histories h\r\n    LEFT JOIN LATERAL (\r\n        SELECT\r\n            a.action_type,\r\n            a.metadata->>'url' AS url,\r\n            a.metadata->'userDetails'->>'username' AS username\r\n        FROM audit_logs a\r\n        WHERE a.created_at BETWEEN h.created_at - '1 second'::interval AND h.created_at + '1 second'::interval AND a.module = 'order'\r\n        ORDER BY abs(extract(epoch from h.created_at) - extract(epoch from a.created_at))\r\n        LIMIT 1\r\n    ) al ON true\r\n    UNION ALL\r\n\r\n    -- Payment Events\r\n    SELECT\r\n        h.created_at AS event_time,\r\n        h.requisition_id,\r\n        'Payment' AS event_type,\r\n        'PR created for ' || h.supplier AS description,\r\n        h.status,\r\n        'PR-' || h.pr_number AS reference_no,\r\n        al.action_type,\r\n        al.url,\r\n        al.username\r\n    FROM\r\n        requisition_payment_histories h\r\n    LEFT JOIN LATERAL (\r\n        SELECT\r\n            a.action_type,\r\n            a.metadata->>'url' AS url,\r\n            a.metadata->'userDetails'->>'username' AS username\r\n        FROM audit_logs a\r\n        WHERE a.created_at BETWEEN h.created_at - '1 second'::interval AND h.created_at + '1 second'::interval AND a.module = 'payment'\r\n        ORDER BY abs(extract(epoch from h.created_at) - extract(epoch from a.created_at))\r\n        LIMIT 1\r\n    ) al ON true\r\n    UNION ALL\r\n\r\n    -- Return Events\r\n    SELECT\r\n        h.created_at AS event_time,\r\n        h.requisition_id,\r\n        'Return' AS event_type,\r\n        'Returned ' || h.quantity_returned || ' units of \"' || h.item || '\"' AS description,\r\n        h.status,\r\n        h.dr_number AS reference_no,\r\n        al.action_type,\r\n        al.url,\r\n        al.username\r\n    FROM\r\n        requisition_return_histories h\r\n    LEFT JOIN LATERAL (\r\n        SELECT\r\n            a.action_type,\r\n            a.metadata->>'url' AS url,\r\n            a.metadata->'userDetails'->>'username' AS username\r\n        FROM audit_logs a\r\n        WHERE a.created_at BETWEEN h.created_at - '1 second'::interval AND h.created_at + '1 second'::interval AND a.module = 'return'\r\n        ORDER BY abs(extract(epoch from h.created_at) - extract(epoch from a.created_at))\r\n        LIMIT 1\r\n    ) al ON true\r\n) AS all_histories\r\nWHERE \r\n    all_histories.status = ANY('{${status_var:csv}}')\r\nORDER BY\r\n    event_time DESC;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Requisition Histories",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "id": 5,
+      "panels": [],
+      "title": "Monitoring",
+      "type": "row"
+    },
+    {
+      "type": "stat",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 20
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "postgres_ec2_ds"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) as \"Pending Requisitions\" FROM requisitions WHERE status = 'PENDING_APPROVAL';",
+          "refId": "A"
+        }
+      ],
+      "id": 7,
+      "title": "Pending Requisitions",
+      "gridPos": {
+        "h": 9,
+        "w": 6,
+        "x": 0,
+        "y": 41
+      }
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "postgres_ec2_ds"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "Requisition Counts per Status",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 18,
+        "w": 18,
+        "x": 6,
+        "y": 41
+      },
+      "id": 6,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "colorByField": "status",
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "right",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "pluginVersion": "12.0.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "postgres_ec2_ds"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\r\n  status,\r\n  COUNT(id) AS \"total\"\r\nFROM\r\n  requisitions\r\nGROUP BY\r\n  status\r\nORDER BY\r\n  \"total\" DESC;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Requisition Statuses",
+      "type": "barchart"
+    },
+    {
+      "type": "stat",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 50
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "postgres_ec2_ds"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) as \"New Requisitions\" FROM requisitions WHERE status = 'DRAFT' AND created_at >= NOW() - INTERVAL '24 hours';",
+          "refId": "A"
+        }
+      ],
+      "id": 8,
+      "title": "New Requisitions",
+      "gridPos": {
+        "h": 9,
+        "w": 6,
+        "x": 0,
+        "y": 50
+      }
+    }
+  ],
+  "preload": false,
+  "schemaVersion": 41,
+  "tags": [
+    "Tables",
+    "Requisitions",
+    "Histories"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "postgres_ec2_ds"
+        },
+        "definition": "SELECT status FROM requisitions WHERE status IS NOT NULL AND status != ''\nUNION\nSELECT status FROM requisition_canvass_histories WHERE status IS NOT NULL AND status != ''\nUNION\nSELECT status FROM requisition_delivery_histories WHERE status IS NOT NULL AND status != ''\nUNION\nSELECT status FROM requisition_order_histories WHERE status IS NOT NULL AND status != ''\nUNION\nSELECT status FROM requisition_payment_histories WHERE status IS NOT NULL AND status != ''\nUNION\nSELECT status FROM requisition_return_histories WHERE status IS NOT NULL AND status != ''\nORDER BY\n  status;",
+        "description": "",
+        "includeAll": true,
+        "label": "Status",
+        "name": "status_var",
+        "options": [],
+        "query": "SELECT status FROM requisitions WHERE status IS NOT NULL AND status != ''\nUNION\nSELECT status FROM requisition_canvass_histories WHERE status IS NOT NULL AND status != ''\nUNION\nSELECT status FROM requisition_delivery_histories WHERE status IS NOT NULL AND status != ''\nUNION\nSELECT status FROM requisition_order_histories WHERE status IS NOT NULL AND status != ''\nUNION\nSELECT status FROM requisition_payment_histories WHERE status IS NOT NULL AND status != ''\nUNION\nSELECT status FROM requisition_return_histories WHERE status IS NOT NULL AND status != ''\nORDER BY\n  status;",
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {
+    "hidden": true
+  },
+  "timezone": "browser",
+  "title": "Requisitions",
+  "uid": "f96d5778-5c86-4d06-a495-1494a98a1f98",
+  "version": 15
+}
