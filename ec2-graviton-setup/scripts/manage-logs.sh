@@ -39,7 +39,7 @@ info() {
 show_log_stats() {
     log "📊 Production Log Statistics"
     echo "=================================="
-    
+
     # Docker container logs
     echo -e "\n${BLUE}Docker Container Logs:${NC}"
     for container in prs-ec2-backend prs-ec2-nginx prs-ec2-postgres-timescale; do
@@ -51,13 +51,21 @@ show_log_stats() {
             warning "  $container: Container not running"
         fi
     done
-    
-    # Application logs directory
+
+    # Application logs directory (inside container)
+    echo -e "\n${BLUE}Application Log Files (in container):${NC}"
+    if docker ps -q -f name=prs-ec2-backend > /dev/null 2>&1; then
+        docker exec prs-ec2-backend find /usr/app/logs -name "*.log*" -type f -exec ls -lh {} \; 2>/dev/null | awk '{print "  " $9 ": " $5}' || echo "  No application log files found"
+    else
+        warning "  Backend container not running"
+    fi
+
+    # Local application logs directory (if exists)
     if [ -d "$PROJECT_DIR/logs" ]; then
-        echo -e "\n${BLUE}Application Log Files:${NC}"
+        echo -e "\n${BLUE}Local Application Log Files:${NC}"
         find "$PROJECT_DIR/logs" -name "*.log" -type f -exec ls -lh {} \; | awk '{print "  " $9 ": " $5}'
     fi
-    
+
     # Docker system logs usage
     echo -e "\n${BLUE}Docker System Log Usage:${NC}"
     docker system df --format "table {{.Type}}\t{{.TotalCount}}\t{{.Size}}\t{{.Reclaimable}}"
@@ -66,27 +74,73 @@ show_log_stats() {
 # Function to tail logs in real-time
 tail_logs() {
     local service=${1:-all}
-    
+
     case $service in
         backend|be)
-            log "📋 Tailing backend logs..."
+            log "📋 Tailing backend container logs..."
             docker logs -f prs-ec2-backend
+            ;;
+        app|application)
+            log "📋 Tailing application logs (structured JSON)..."
+            if docker ps -q -f name=prs-ec2-backend > /dev/null 2>&1; then
+                docker exec prs-ec2-backend tail -f /usr/app/logs/app.log
+            else
+                error "Backend container is not running"
+                exit 1
+            fi
             ;;
         nginx)
             log "📋 Tailing nginx logs..."
             docker logs -f prs-ec2-nginx
             ;;
         postgres|db)
-            log "📋 Tailing postgres logs..."
-            docker logs -f prs-ec2-postgres-timescale
+            log "📋 Tailing postgres logs (filtering out binary data)..."
+            if docker ps -q -f name=prs-ec2-postgres-timescale > /dev/null 2>&1; then
+                info "Showing PostgreSQL connection and query logs (binary data filtered)..."
+                docker logs -f prs-ec2-postgres-timescale 2>&1 | grep -v -E "^[0-9, ]+$|^[[:space:]]*[0-9, ]+[[:space:]]*$"
+            else
+                error "PostgreSQL container is not running"
+                exit 1
+            fi
             ;;
         all)
             log "📋 Tailing all service logs..."
             docker-compose -f "$PROJECT_DIR/docker-compose.yml" logs -f backend nginx postgres
             ;;
+        all-app)
+            log "📋 Tailing all logs including application logs..."
+            info "Starting parallel log tailing (press Ctrl+C to stop)..."
+            info "Container logs will be prefixed, application logs will show raw JSON"
+            echo ""
+
+            # Start container logs in background with prefixes
+            docker-compose -f "$PROJECT_DIR/docker-compose.yml" logs -f backend nginx postgres &
+            COMPOSE_PID=$!
+
+            # Start application logs in foreground
+            if docker ps -q -f name=prs-ec2-backend > /dev/null 2>&1; then
+                echo -e "${BLUE}=== APPLICATION LOGS (JSON) ===${NC}"
+                docker exec prs-ec2-backend tail -f /usr/app/logs/app.log &
+                APP_PID=$!
+
+                # Wait for either process and cleanup on exit
+                trap "kill $COMPOSE_PID $APP_PID 2>/dev/null; exit" INT TERM
+                wait
+            else
+                kill $COMPOSE_PID 2>/dev/null
+                error "Backend container is not running - showing container logs only"
+                wait
+            fi
+            ;;
         *)
             error "Unknown service: $service"
-            echo "Available services: backend, nginx, postgres, all"
+            echo "Available services:"
+            echo "  backend, be          - Backend container logs"
+            echo "  app, application     - Application logs (structured JSON)"
+            echo "  nginx               - Nginx container logs"
+            echo "  postgres, db        - PostgreSQL container logs"
+            echo "  all                 - All container logs"
+            echo "  all-app             - All logs including application logs"
             exit 1
             ;;
     esac
@@ -96,30 +150,55 @@ tail_logs() {
 search_errors() {
     local hours=${1:-1}
     local since_time=$(date -d "$hours hours ago" --iso-8601=seconds)
-    
+
     log "🔍 Searching for errors in the last $hours hour(s)..."
     echo "=================================="
-    
-    # Search backend logs for errors
-    echo -e "\n${RED}Backend Errors:${NC}"
-    docker logs prs-ec2-backend --since="$since_time" 2>&1 | grep -i -E "(error|500|internal server error|exception)" | tail -20
-    
-    # Search nginx logs for 5xx errors
-    echo -e "\n${RED}Nginx 5xx Errors:${NC}"
-    docker logs prs-ec2-nginx --since="$since_time" 2>&1 | grep -E " 5[0-9][0-9] " | tail -20
-    
+
+    # Search backend container logs for errors
+    echo -e "\n${RED}Backend Container Errors:${NC}"
+    if docker ps -q -f name=prs-ec2-backend > /dev/null 2>&1; then
+        docker logs prs-ec2-backend --since="$since_time" 2>&1 | grep -i -E "(error|500|internal server error|exception)" | tail -20 || echo "  No errors found in backend container logs"
+    else
+        warning "  Backend container not running"
+    fi
+
+    # Search application logs for errors
+    echo -e "\n${RED}Application Log Errors:${NC}"
+    if docker ps -q -f name=prs-ec2-backend > /dev/null 2>&1; then
+        docker exec prs-ec2-backend grep -E '"level":(40|50)' /usr/app/logs/app.log 2>/dev/null | tail -10 || echo "  No errors found in application logs"
+    else
+        warning "  Backend container not running"
+    fi
+
+    # Search nginx logs for 4xx/5xx errors (improved pattern for access logs)
+    echo -e "\n${RED}Nginx 4xx/5xx Errors:${NC}"
+    if docker ps -q -f name=prs-ec2-nginx > /dev/null 2>&1; then
+        docker logs prs-ec2-nginx --since="$since_time" 2>&1 | grep -E '" [4-5][0-9][0-9] ' | tail -20 || echo "  No 4xx/5xx errors found in nginx logs"
+    else
+        warning "  Nginx container not running"
+    fi
+
     # Search postgres logs for errors
     echo -e "\n${RED}Database Errors:${NC}"
-    docker logs prs-ec2-postgres-timescale --since="$since_time" 2>&1 | grep -i -E "(error|fatal|panic)" | tail -20
+    if docker ps -q -f name=prs-ec2-postgres-timescale > /dev/null 2>&1; then
+        local pg_errors=$(docker logs prs-ec2-postgres-timescale --since="$since_time" 2>&1 | grep -i -E "(error|fatal|panic|warning)" | tail -20)
+        if [ -n "$pg_errors" ]; then
+            echo "$pg_errors"
+        else
+            echo "  No errors found in database logs"
+        fi
+    else
+        warning "  PostgreSQL container not running"
+    fi
 }
 
 # Function to export logs for analysis
 export_logs() {
     local output_dir="$PROJECT_DIR/log-exports/$(date +%Y%m%d_%H%M%S)"
     mkdir -p "$output_dir"
-    
+
     log "📦 Exporting logs to: $output_dir"
-    
+
     # Export container logs
     for container in prs-ec2-backend prs-ec2-nginx prs-ec2-postgres-timescale; do
         if docker ps -q -f name=$container > /dev/null 2>&1; then
@@ -127,13 +206,13 @@ export_logs() {
             docker logs $container > "$output_dir/${container}.log" 2>&1
         fi
     done
-    
+
     # Export application logs if they exist
     if [ -d "$PROJECT_DIR/logs" ]; then
         info "Copying application logs..."
         cp -r "$PROJECT_DIR/logs" "$output_dir/app-logs"
     fi
-    
+
     # Create summary
     cat > "$output_dir/export-summary.txt" << EOF
 Log Export Summary
@@ -151,30 +230,39 @@ System Resources:
 $(free -h)
 $(df -h)
 EOF
-    
+
     log "✅ Log export completed: $output_dir"
 }
 
 # Function to clean old logs
 cleanup_logs() {
     log "🧹 Cleaning up old logs (older than $LOG_RETENTION_DAYS days)..."
-    
-    # Clean application logs
+
+    # Clean application logs inside container
+    if docker ps -q -f name=prs-ec2-backend > /dev/null 2>&1; then
+        info "Cleaning application logs in backend container..."
+        docker exec prs-ec2-backend find /usr/app/logs -name "*.log*" -type f -mtime +$LOG_RETENTION_DAYS -delete 2>/dev/null || true
+        info "Cleaned application logs older than $LOG_RETENTION_DAYS days"
+    else
+        warning "Backend container not running - cannot clean application logs"
+    fi
+
+    # Clean local application logs
     if [ -d "$PROJECT_DIR/logs" ]; then
         find "$PROJECT_DIR/logs" -name "*.log" -type f -mtime +$LOG_RETENTION_DAYS -delete
-        info "Cleaned application logs older than $LOG_RETENTION_DAYS days"
+        info "Cleaned local application logs older than $LOG_RETENTION_DAYS days"
     fi
-    
+
     # Clean log exports
     if [ -d "$PROJECT_DIR/log-exports" ]; then
         find "$PROJECT_DIR/log-exports" -type d -mtime +$LOG_RETENTION_DAYS -exec rm -rf {} +
         info "Cleaned log exports older than $LOG_RETENTION_DAYS days"
     fi
-    
+
     # Clean Docker logs (this requires stopping and starting containers)
     warning "Docker container logs are managed by Docker's logging driver"
     warning "Configure max-size and max-file in docker-compose.yml for automatic rotation"
-    
+
     log "✅ Log cleanup completed"
 }
 
@@ -187,15 +275,25 @@ Usage: $0 [COMMAND] [OPTIONS]
 
 Commands:
     stats                   Show log statistics and usage
-    tail [SERVICE]         Tail logs in real-time (backend|nginx|postgres|all)
+    tail [SERVICE]         Tail logs in real-time
     search [HOURS]         Search for errors in the last N hours (default: 1)
     export                 Export all logs for analysis
     cleanup                Clean up old logs based on retention policy
     help                   Show this help message
 
+Tail Services:
+    backend, be            Backend container logs (Docker stdout/stderr)
+    app, application       Application logs (structured JSON from /usr/app/logs/app.log)
+    nginx                  Nginx container logs
+    postgres, db           PostgreSQL container logs
+    all                    All container logs (Docker compose)
+    all-app                All logs including application logs (parallel view)
+
 Examples:
     $0 stats               # Show log statistics
-    $0 tail backend        # Tail backend logs
+    $0 tail backend        # Tail backend container logs
+    $0 tail app            # Tail application logs (structured JSON)
+    $0 tail all-app        # Tail all logs including application logs
     $0 search 24           # Search for errors in last 24 hours
     $0 export              # Export all logs
     $0 cleanup             # Clean up old logs

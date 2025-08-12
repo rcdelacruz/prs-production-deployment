@@ -48,3 +48,6 @@ docker-compose.override.yml
 .tmp/
 .temp/
 ec2-graviton-setup/.env
+
+# Dump file
+ec2-graviton-setup/backups
