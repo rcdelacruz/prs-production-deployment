@@ -114,6 +114,9 @@ services:
 
       # Production settings
       - ENABLE_DEBUG_LOGS=${ENABLE_DEBUG_LOGS:-false}
+
+      # Department Association
+      - ASSOCIATION_DEPARTMENT_CODE=${ASSOCIATION_DEPARTMENT_CODE}
     volumes:
       - uploads_data:/usr/app/upload
       - logs_data:/usr/app/logs
